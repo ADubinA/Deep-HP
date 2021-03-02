@@ -11,85 +11,93 @@ import torch.optim as optim
 from pointnet.losses import ConfusionMatrix, CloseNeighborAccuracy
 import seaborn as sn
 import matplotlib.pyplot as plt
-from utils.confusion_matrix_graphics import plot_confusion_matrix_from_data
+from pointnet.losses import chamfer_distance,chamfer_distance_with_batch
 
 class LightningPointNet(pl.LightningModule):
-    def __init__(self, model):
+    def __init__(self, model, ref_pcd):
         super(LightningPointNet, self).__init__()
         self.model = model
         self.lr=0.001
         self.betas = (0.9, 0.999)
         self.accuracy_f = pl.metrics.Accuracy()
-        self.cm = ConfusionMatrix(num_classes=model.num_classes)
-        self.cm.compute_on_step = False
-        self.neighbor_acc = CloseNeighborAccuracy()
+        # self.cm = ConfusionMatrix(num_classes=model.num_classes)
+        # self.cm.compute_on_step = False
+        self.ref_pcd = ref_pcd
+        self.stn = STN3DAffine()
+    def on_fit_start(self):
+        self.ref_pcd = self.ref_pcd.to(self.device)
+
     def forward(self, x):
         x = x.transpose(2, 1)
         return self.model(x)[0]
     def training_step(self, batch, batch_idx):
         results = self._step_with_loss(batch, batch_idx)
         self.log("train_loss", results["loss"], prog_bar=True, on_step=True, on_epoch=False)
-        self.log("train_accuracy", results["acc"], prog_bar=True, on_step=True, on_epoch=False)
-        self.log("train_neighbor_accuracy", results["nei_acc"], prog_bar=True, on_step=True, on_epoch=False)
+        # self.log("train_accuracy", results["acc"], prog_bar=True, on_step=True, on_epoch=False)
+        # self.log("train_neighbor_accuracy", results["nei_acc"], prog_bar=True, on_step=True, on_epoch=False)
+        tensorboard = self.logger.experiment
+        # tensorboard.add_histogram("value_distribution on train", torch.flatten(results["pred"]), self.global_step)
+        pred = results["pred"]
+        for idx in range(len(batch["file_name"])):
+            target = batch["target"][idx]
+            file_name = batch["file_name"][idx]
 
+            tensorboard.add_text(f"results of epoch {self.current_epoch}",
+                                 f"results of {pred[idx]} (was really {target}) file name is {file_name}",
+                                 self.global_step)
         return results
         # return loss
     def _step_with_loss(self, batch, batch_idx):
         points, target = batch["data"],batch["target"]
-        points = points.transpose(2, 1)
-        pred, trans, trans_feat = self.model(points)
+        trans = self.stn(points.transpose(2, 1))
+        points_z = torch.clone(points)
 
-        # TODO make sure this make sense
-        pred_choice = pred.data.max(1)[1]
-        acc = self.accuracy_f(pred_choice, target)
-        nei_acc = self.neighbor_acc(pred_choice,target)
-        loss = F.nll_loss(pred, target)
+        ones = torch.ones((points_z.shape[0], points_z.shape[1],1))
+        if points_z.is_cuda:
+            ones = ones.cuda()
+        points_z = torch.cat((points_z,ones), dim = -1)
+        # points_z = points_z.transpose(2, 1)
+        points_z = torch.bmm(points_z, trans)
+        points_z = points_z[:,:,0:3]
+        # points_z = points_z.transpose(2, 1)
+        # points_z[:,:,2] = points[:,:,2] + pred_z1
 
-        # transform_loss = feature_transform_regularizer(trans_feat) * 0.001    #, "transform_loss":transform_loss
-        # loss+= transform_loss
-        return {"loss":loss , "acc":acc, "pred":pred_choice, "nei_acc":nei_acc}
+        loss = chamfer_distance(points_z,self.ref_pcd)
+
+        return {"loss":loss, "pred_points":points_z, "pred": trans}
     def validation_step(self, batch, batch_idx):
         results = self._step_with_loss(batch, batch_idx)
         pred = results["pred"]
         self.log("validation_loss", results["loss"], prog_bar=True, on_step=False, on_epoch=True)
-        self.log("validation_accuracy", results["acc"], prog_bar=True, on_step=False, on_epoch=True)
-        self.log("validation_neighbor_accuracy", results["nei_acc"], prog_bar=True, on_step=False, on_epoch=True)
+        # self.log("validation_accuracy", results["acc"], prog_bar=True, on_step=False, on_epoch=True)
+        # self.log("validation_neighbor_accuracy", results["nei_acc"], prog_bar=True, on_step=False, on_epoch=True)
         self.log("learning_rate", self.lr, prog_bar=False)
-        self.cm(pred, batch["target"])
+        # self.cm(pred, batch["target"])
         tensorboard = self.logger.experiment
         for idx in range(len(batch["file_name"])):
             target = batch["target"][idx]
             file_name = batch["file_name"][idx]
-            if pred[idx] != target:
-                tensorboard.add_text(f"results of epoch {self.current_epoch}", f"bad results of {pred[idx]} (was really {target}) file name is {file_name}",self.global_step)
-        return results
-    def on_validation_epoch_end(self):
-        tensorboard = self.logger.experiment
-        fig, ax= plt.subplots()
-        cm_item = self.cm.compute()
-        ax = sn.heatmap(cm_item.cpu(), cmap='Oranges', annot=True, ax=ax)
-        tensorboard.add_figure("Confusion matrix at epoch" ,fig,global_step=self.global_step)
-        self.cm.reset()
 
-    def test_step(self, batch, batch_idx):
-        results = self._step_with_loss(batch, batch_idx)
-        self.log("test_accuracy", results["acc"], prog_bar=True, on_step=False, on_epoch=True)
+            tensorboard.add_text(f"results of epoch {self.current_epoch}",
+                                     f"results of {pred[idx]} (was really {target}) file name is {file_name}",
+                                     self.global_step)
         return results
+
     def configure_optimizers(self):
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr, betas=self.betas)
-        #todo scheduler
-        return optimizer
+        # scheduler = optim.lr_scheduler.LambdaLR(optimizer)
+        return optimizer#, scheduler
 
 
-class PointNetCls(nn.Module):
-    def __init__(self, k=2, feature_transform=True):
-        super(PointNetCls, self).__init__()
-        self.num_classes = k
+
+class PointNetReg(nn.Module):
+    def __init__(self, feature_transform=True):
+        super(PointNetReg, self).__init__()
         self.feature_transform = feature_transform
         self.feat = PointNetfeat(global_feat=True, feature_transform=feature_transform)
         self.fc1 = nn.Linear(1024, 512)
         self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, self.num_classes)
+        self.fc3 = nn.Linear(256, 1)
         self.dropout = nn.Dropout(p=0.3)
         self.bn1 = nn.BatchNorm1d(512)
         self.bn2 = nn.BatchNorm1d(256)
@@ -100,8 +108,88 @@ class PointNetCls(nn.Module):
         x = F.relu(self.bn1(self.fc1(x)))
         x = F.relu(self.bn2(self.dropout(self.fc2(x))))
         x = self.fc3(x)
-        return F.log_softmax(x, dim=1), trans, trans_feat
+        return x, trans, trans_feat
 
+class PointNetCls(nn.Module):
+    def __init__(self, k=2, feature_transform=True):
+        super(PointNetCls, self).__init__()
+        self.feature_transform = feature_transform
+        self.feat = PointNetfeat(global_feat=True, feature_transform=feature_transform)
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 1)
+        self.dropout = nn.Dropout(p=0.3)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x, trans, trans_feat = self.feat(x)
+        x = F.relu(self.bn1(self.fc1(x)))
+        x = F.relu(self.bn2(self.dropout(self.fc2(x))))
+        x = self.fc3(x)
+        return x, trans, trans_feat
+
+class STN3DAffine(nn.Module):
+    def __init__(self):
+        super(STN3DAffine, self).__init__()
+        self.conv1 = torch.nn.Conv1d(3, 64, 1)
+        self.conv2 = torch.nn.Conv1d(64, 128, 1)
+        self.conv3 = torch.nn.Conv1d(128, 1024, 1)
+        self.fc1 = nn.Linear(1024, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 16)
+        self.relu = nn.ReLU()
+
+        self.bn1 = nn.BatchNorm1d(64)
+        self.bn2 = nn.BatchNorm1d(128)
+        self.bn3 = nn.BatchNorm1d(1024)
+        self.bn4 = nn.BatchNorm1d(512)
+        self.bn5 = nn.BatchNorm1d(256)
+
+
+    def forward(self, x):
+        batchsize = x.size()[0]
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = torch.max(x, 2, keepdim=True)[0]
+        x = x.view(-1, 1024)
+
+        x = F.relu(self.bn4(self.fc1(x)))
+        x = F.relu(self.bn5(self.fc2(x)))
+        x = self.fc3(x)
+
+        iden = torch.from_numpy(np.eye(4).astype(np.float32)).view(1,16).repeat(batchsize,1)
+        if x.is_cuda:
+            iden = iden.cuda()
+        x = x + iden
+        x = x.view(-1, 4, 4)
+        # make sure matrix is in form
+        x_new = torch.clone(x)
+
+        x_new[:, 0, 0] = torch.pow(x[:, 0, 0],2)
+        x_new[:, 1, 1] = torch.pow(x[:, 1, 1],2)
+        x_new[:, 2, 2] = torch.pow(x[:, 2, 2],2)
+
+        x_new[:, 3, 0] = 0
+        x_new[:, 3, 1] = 0
+        x_new[:, 3, 2] = 0
+        x_new[:, 3, 3] = 1
+
+        x_new[:, 0, 1] = 0
+        x_new[:, 0, 2] = 0
+        x_new[:, 1, 0] = 0
+        x_new[:, 1, 2] = 0
+        x_new[:, 2, 0] = 0
+        x_new[:, 2, 1] = 0
+
+        x_new[:, 0, 3] = x[:, 0, 3]
+        x_new[:, 1, 3] = x[:, 1, 3]
+        x_new[:, 2, 3] = x[:, 2, 3] * 100
+
+
+        return x_new
 
 class STN3d(nn.Module):
     def __init__(self):

@@ -40,6 +40,10 @@ def chamfer_distance(a, b, method="mean"):
 	a: (b, p, 3)
 	b: (b, q, 3)
 	"""
+
+    # set the atlas the match the batch
+    b = b.expand(a.shape[0],b.shape[1],b.shape[2])
+
     diff = a[:, :, None, :] - b[:, None, :, :]  # (b, p, q, 3)
     dist = diff.norm(p=2, dim=3)
     d_min, _ = dist.min(2)
@@ -68,12 +72,59 @@ def array2samples_distance(array1, array2):
     distances = np.mean(distances)
     return distances
 
-def chamfer_distance_numpy(array1, array2):
-    # batch_size, num_point, num_features = array1.shape
-    # dist = 0
-    return array2samples_distance(array1[0], array2[0])
-    # for i in range(batch_size):
-    #     av_dist1 = array2samples_distance(array1[i], array2[i])
-    #     av_dist2 = array2samples_distance(array2[i], array1[i])
-    #     dist = dist + (av_dist1+av_dist2)/batch_size
-    # return dist
+def chamfer_distance_with_batch(p1, p2, debug=False):
+
+    '''
+    Calculate Chamfer Distance between two point sets
+    :param p1: size[B, N, D]
+    :param p2: size[B, M, D]
+    :param debug: whether need to output debug info
+    :return: sum of all batches of Chamfer Distance of two point sets
+    '''
+    assert p1.size(0) == p2.size(0) and p1.size(2) == p2.size(2)
+
+    if debug:
+        print(p1[0])
+
+    p1 = p1.unsqueeze(1)
+    p2 = p2.unsqueeze(1)
+    if debug:
+        print('p1 size is {}'.format(p1.size()))
+        print('p2 size is {}'.format(p2.size()))
+        print(p1[0][0])
+
+    p1 = p1.repeat(1, p2.size(2), 1, 1)
+    if debug:
+        print('p1 size is {}'.format(p1.size()))
+
+    p1 = p1.transpose(1, 2)
+    if debug:
+        print('p1 size is {}'.format(p1.size()))
+        print(p1[0][0])
+
+    p2 = p2.repeat(1, p1.size(1), 1, 1)
+    if debug:
+        print('p2 size is {}'.format(p2.size()))
+        print(p2[0][0])
+
+    dist = torch.add(p1, torch.neg(p2))
+    if debug:
+        print('dist size is {}'.format(dist.size()))
+        print(dist[0])
+
+    dist = torch.norm(dist, 2, dim=3)
+    if debug:
+        print('dist size is {}'.format(dist.size()))
+        print(dist)
+
+    dist = torch.min(dist, dim=2)[0]
+    if debug:
+        print('dist size is {}'.format(dist.size()))
+        print(dist)
+
+    dist = torch.sum(dist)
+    if debug:
+        print('-------')
+        print(dist)
+
+    return dist

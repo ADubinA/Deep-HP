@@ -179,10 +179,26 @@ def create_dataset(reference_path, input_folder, output_folder,num_slices, inten
             i+=1
     df.to_csv(os.path.join(output_folder, "labels.csv"))
 
+def create_reference(volume_path, file_name, save_location, intensity_range=(500,1000), sample_num=0):
+    volume = load_file(volume_path)
+    pcd = volume_to_pointcloud(volume, sample_num=sample_num, intensity_range=intensity_range)
+    o3d.io.write_point_cloud(os.path.join(save_location, file_name+".ply"), pcd)
+
+def create_full_ply_dataset(input_folder, output_folder, sample_num=0):
+    for file_path in tqdm.tqdm(glob.glob(os.path.join(input_folder,"*.nii*"))):
+        file_name = os.path.basename(file_path).split(".")[0]
+        if os.path.exists(os.path.join(output_folder,file_name +".ply")):
+            continue
+
+        try:
+            create_reference(file_path,file_name,output_folder)
+        except Exception as e:
+            print ("error at")
+            print (file_name)
+
 
 if __name__ == "__main__":
-    reference_path = r"D:\visceral\Anatomy3-trainingset\ct_wb\10000017_1_CT_wb.nii.gz"
+    # reference_path = r"D:\visceral\Anatomy3-trainingset\ct_wb\10000017_1_CT_wb.nii.gz"
     input_folder = r"D:\visceral\visceral2\retrieval-dataset\ct_wb"
-    output_folder = r"D:\visceral\visceral2_sliceV2"
-    num_slices = 6
-    create_dataset(reference_path, input_folder, output_folder, num_slices, stride=0.5)
+    output_folder = r"D:\visceral\full_skeletons"
+    create_full_ply_dataset(input_folder, output_folder)
