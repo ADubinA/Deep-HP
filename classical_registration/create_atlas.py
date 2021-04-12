@@ -8,6 +8,7 @@ import random
 from sklearn.cluster import AgglomerativeClustering
 import glob, os
 from scipy.spatial.transform import Rotation as R
+import networkx
 
 def lineseg_dists(p, a, b):
     # TODO for you: consider implementing @Eskapp's suggestions
@@ -45,7 +46,7 @@ def to_spherical(points, normalize_angles=True):
         points_spherical[:, 2] = (points_spherical[:, 2] + np.pi) / (2 * np.pi)
     return points_spherical
 
-def pick_points(pcd, bone_lineset):
+def pick_points(pcd):
     print("")
     print(
         "1) Please pick at least three correspondences using [shift + left click]"
@@ -58,7 +59,7 @@ def pick_points(pcd, bone_lineset):
     vis.add_geometry(pcd)
     vis.run()  # user picks points
     vis.destroy_window()
-    print(vis.get_picked_points())
+    print(np.asarray(pcd.points)[vis.get_picked_points()])
     return vis.get_picked_points()
 
 def remove_interior(pcd,rad = 15):
@@ -139,8 +140,8 @@ def check_full_bone(pcd,bone_line):
                       np.asarray(pcd.points)[point_index] - bone_line/2)
         if (dists<1).sum()>5:
             np.asarray(pcd.colors)[point_index] = [1,0,0]
-    return pcd
-    # o3d.visualization.draw_geometries([pcd])
+    # return pcd
+    o3d.visualization.draw_geometries([pcd])
 
 def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
     bone_tree = o3d.geometry.KDTreeFlann(pcd)
@@ -159,15 +160,35 @@ def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
             choosen_points.append(np.asarray(pcd.points)[point_index])
             choosen_indexes.append(point_index)
 
-    # choosen_points = np.array(choosen_points)
-    # choosen_indexes = np.array(choosen_indexes)
-    # clustering = AgglomerativeClustering(n_clusters=None,distance_threshold=cluster_dist, linkage="single").fit(choosen_points)
-    #
+    choosen_points = np.array(choosen_points)
+    choosen_indexes = np.array(choosen_indexes)
+    clustering = AgglomerativeClustering(n_clusters=None,distance_threshold=cluster_dist, linkage="single").fit(choosen_points)
+
+    clusters =[]
+    for cluster_index in range(clustering.n_clusters_):
+        cluster = choosen_indexes[clustering.labels_== cluster_index]
+        if cluster.shape[0]<5:
+            continue
+        clusters.append(cluster)
     # colors = np.random.random((clustering.labels_.shape[0],3))
     # np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
-    print(len(choosen_points))
-    return pcd
 
+    # print(len(choosen_points))
+    return pcd, clusters
+
+def print_possible_bone(pcd, clusters_indexes, bone_line, previous_lines):
+    true_bone_option = []
+    for cluster in clusters_indexes:
+        points = np.asarray(pcd.points)[cluster]
+        mean_point = points.mean(axis=0)
+        new_bone_line = bone_line - (bone_line[1]-bone_line[0])/2 - bone_line[0]  + mean_point # center point
+        true_bone_option.append(new_bone_line)
+
+    if previous_lines == []:
+        return true_bone_option
+    u = true_bone_option[:, None] - previous_lines
+    best_option = np.unravel_index(np.linalg.norm(u, axis=2).argmin(), np.linalg.norm(u, axis=2).shape)
+    return previous_lines[best_option[1]], true_bone_option[best_option[0],:]
 def test1_get_some_bones():
     normal_rad = 10
     source = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
@@ -191,13 +212,13 @@ def test1_get_some_bones():
     pcd = remove_non_normals(source,bone_line)
     pcd = check_full_bone(pcd,bone_line)
 
-    o3d.visualization.draw_geometries(([pcd,bone_line]))
+    o3d.visualization.draw_geometries(([pcd,bone_lineset]))
     # pcd = remove_interior(source)
     # remove_non_normals(pcd, bone_line)
 def test2_legs():
     skeleton_folder = r"D:\visceral\full_skeletons"
     # bone_line = np.array([84,170,450]) - np.array([84,82,400]) # Legs
-    bone_line = np.array([390,320,540]) - np.array([420,260,560]) # left pelvis bone
+    bone_line = np.array([200,340,540]) - np.array([90,220,550]) # left pelvis bone
     # bone_line = np.array([-70. , 46. , 26.]) # right front pelvis bone
     bone_lineset = o3d.geometry.LineSet()
     bone_lineset.points = o3d.utility.Vector3dVector(np.array([[390,320,540],np.array([420,260,560])]))
@@ -225,7 +246,8 @@ def test3_clustering():
 
     bone_line = np.array([-70., 46., 26.])  # right front pelvis bone
     source = remove_non_normals(source, bone_line)
-    get_bone_clusters(source, bone_line)
+    pcd = get_bone_clusters(source, bone_line)
+
 
 def test4_test_random_dir():
     normal_rad = 10
@@ -256,9 +278,49 @@ def test4_test_random_dir():
         np.asarray(pcd.colors)
         o3d.visualization.draw_geometries([pcd,bone_line])
 
+def test5_atlas():
+    bone_points = np.array([[181.76923077, 313.03846154,550.23076923],
+                            [ 79.4875,     184.775,      542.45625   ],
+                            [126.25   ,    163.5   ,     515.75      ],
+                            [179.00625 ,   185.44791667, 497.09345238],
+                            [239.66666667, 131.33333333 ,476.66666667],
+                            [237.24444444,193.60520833, 465.11875   ],
+                            [183.13333333, 275.72982456, 472.12982456]])
+    connection = np.array([[0,1],[1,2],[2,3],[3,4],[4,5],[5,6]])
+    lineset = o3d.geometry.LineSet()
+    lineset.points = o3d.utility.Vector3dVector(bone_points)
+    lineset.lines = o3d.utility.Vector2iVector(connection)
+    lineset.paint_uniform_color([0,0,0])
+    normal_rad = 10
+    sample_size = 20
+    source = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    source.paint_uniform_color([0.1, 0.1, 0.1])
+    source.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
+    previous_options = []
+    selected = []
+    bone_graph = networkx.Graph()
+    for bone_index in range(6):
+        np.asarray(lineset.colors)[bone_index] = np.array([1,0,0])
+        bone_line = np.array(bone_points[bone_index] - bone_points[bone_index+1])
+        pcd = o3d.geometry.PointCloud(source)
+        pcd = remove_non_normals(pcd, bone_line)
+        pcd, clusters_index = get_bone_clusters(pcd, bone_line)
+        # o3d.visualization.draw_geometries([lineset,pcd])
+        previous_options= [print_possible_bone(pcd,clusters_index,bone_points[bone_index:bone_index+2,:],previous_options)[1]]
+
+        lineset = o3d.geometry.LineSet()
+        lineset.points = o3d.utility.Vector3dVector(previous_options[-1])
+        lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
+        selected.append(lineset)
+
+    selected.append(pcd)
+    o3d.visualization.draw_geometries(pcd)
+
 
 if __name__ == "__main__":
+
     # test1_get_some_bones()
     # test2_legs()
     # test3_clqqqustering()
-    test4_test_random_dir()
+    # test4_test_random_dir()
+    test5_atlas()
