@@ -46,25 +46,47 @@ class HyperSkeleton:
         # calculate the clusters
         filtered_pcd, clusters_index = self._get_bone_clusters(filtered_pcd, bone_line_numpy)
         # for each cluster
-        bone_line_numpy = np.array([bone_line.get_line_coordinate(0)[1] , bone_line.get_line_coordinate(0)[0]])
+        bone_line_numpy = np.array([bone_line.get_line_coordinate(0)[1], bone_line.get_line_coordinate(0)[0]])
         for cluster_index in clusters_index:
             # find the best line for the cluster
             points = np.asarray(pcd.points)[cluster_index]
             mean_point = points.mean(axis=0)
-            new_bone_line = bone_line_numpy - (bone_line_numpy[1] - bone_line_numpy[0]) / 2 - bone_line_numpy[0] + mean_point  # center point
+            new_bone_line = bone_line_numpy - (bone_line_numpy[1] - bone_line_numpy[0]) / 2 - bone_line_numpy[
+                0] + mean_point  # center point
 
             # add it to the graph
             lineset = o3d.geometry.LineSet()
             lineset.points = o3d.utility.Vector3dVector(new_bone_line)
-            lineset.lines = o3d.utility.Vector2iVector([[0,1]])
-            self.skeleton_graph.add_node(str(new_bone_line),pos=lineset, atlas_index=line_index)
+            lineset.lines = o3d.utility.Vector2iVector([[0, 1]])
+            self.skeleton_graph.add_node(str(new_bone_line), pos=lineset, atlas_index=line_index)
             # calculate the probability that this line matches the parent node
             nx.set_node_attributes(self.skeleton_graph,
                                    {str(new_bone_line): {"prob": self._calculate_probability(
-                                       str(new_bone_line), node_key)}})
-            self.skeleton_graph.add_edge(node_key,str(new_bone_line))
-    def _calculate_probability(self, child_node, parent_node):
+                                       str(new_bone_line))}})
+            self.skeleton_graph.add_edge(node_key, str(new_bone_line))
+
+    def _calculate_probability(self, child_node):
+        # get current bone indexes
+        current_bone_index = np.asarray(self.atlas.lines)[self.skeleton_graph.nodes[child_node]["atlas_index"]]
+
+        # get the rest of the bones from the tree, that connect to the current bone
+        ancestors = nx.ancestors(self.skeleton_graph, child_node)
+        for node in ancestors:
+            line_index = np.asarray(self.atlas.lines)[self.skeleton_graph.nodes[node]["atlas_index"]]
+            if line_index[0] in current_bone_index:
+                match_index = (0, np.where(line_index[0] == current_bone_index)[0][0])
+            elif line_index[1] in current_bone_index:
+                match_index = (1, np.where(line_index[1] == current_bone_index)[0][0])
+            else:
+                continue
+            parent_lineset = self.skeleton_graph.nodes[node]["pos"]
+            parent_pos = parent_lineset.get_line_coordinate(0)[match_index[0]]
+            child_lineset = self.skeleton_graph.nodes[child_node]["pos"]
+            child_pos = parent_lineset.get_line_coordinate(0)[match_index[1]]
+            loss = np.linalg.norm(parent_pos-child_pos)
+
         return 0
+
     def _get_bone_from_atlas(self, node_key):
         # take only bones that haven't been selected
         ancestors = nx.ancestors(self.skeleton_graph, node_key)
@@ -72,13 +94,14 @@ class HyperSkeleton:
         # find bones that are near the preselected, but aren't selected
         preselected_bones = np.asarray(self.atlas.lines)[preselected_bones_indexes]
         options = [option for option in np.asarray(self.atlas.lines) if option[0] in preselected_bones or
-                                                                        option[0] in preselected_bones and
-                                                                        option not in preselected_bones]
+                   option[0] in preselected_bones and
+                   option not in preselected_bones]
         selected_bone = random.choice(options)
-
-
-        return o3d.geometry.LineSet(), index
-
+        index = np.where(np.asarray(self.atlas.lines) == selected_bone)[0][0]
+        new_bone = o3d.geometry.LineSet()
+        new_bone.lines = o3d.utility.Vector3dVector(np.asarray(self.atlas.points)[selected_bone])
+        new_bone.lines = o3d.utility.Vector2iVector([0, 1])
+        return new_bone, index
 
     def load_image(self, path):
         pcd = o3d.io.read_point_cloud(path)

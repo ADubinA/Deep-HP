@@ -298,7 +298,6 @@ def test5_atlas():
     source.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
     previous_options = []
     selected = []
-    bone_graph = networkx.Graph()
     for bone_index in range(6):
         np.asarray(lineset.colors)[bone_index] = np.array([1,0,0])
         bone_line = np.array(bone_points[bone_index] - bone_points[bone_index+1])
@@ -306,21 +305,21 @@ def test5_atlas():
         pcd = remove_non_normals(pcd, bone_line)
         pcd, clusters_index = get_bone_clusters(pcd, bone_line)
         # o3d.visualization.draw_geometries([lineset,pcd])
-        previous_options= [print_possible_bone(pcd,clusters_index,bone_points[bone_index:bone_index+2,:],previous_options)[1]]
+        # previous_options= [print_possible_bone(pcd,clusters_index,bone_points[bone_index:bone_index+2,:],previous_options)[1]]
+        #
+        # lineset = o3d.geometry.LineSet()
+        # lineset.points = o3d.utility.Vector3dVector(previous_options[-1])
+        # lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
+        # selected.append(lineset)
 
-        lineset = o3d.geometry.LineSet()
-        lineset.points = o3d.utility.Vector3dVector(previous_options[-1])
-        lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
-        selected.append(lineset)
-
-    selected.append(pcd)
-    o3d.visualization.draw_geometries(pcd)
+        selected.append(pcd)
+        o3d.visualization.draw_geometries([pcd, lineset])
 
 
 if __name__ == "__main__":
 
     # test1_get_some_bones()
-    # test2_legs()
+    test2_legs()
     # test3_clqqqustering()
     # test4_test_random_dir()
-    test5_atlas()
+    # test5_atlas()
