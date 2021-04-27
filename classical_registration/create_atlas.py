@@ -175,7 +175,7 @@ def check_full_bone(pcd,bone_line):
         dists = lineseg_dists(np.asarray(pcd.points)[nie[1:],:],
                       np.asarray(pcd.points)[point_index] + bone_line/2,
                       np.asarray(pcd.points)[point_index] - bone_line/2)
-        if (dists<1).sum()>5:
+        if (dists<1).sum()>np.linalg.norm(bone_line) / 20:
             np.asarray(pcd.colors)[point_index] = [1,0,0]
     return pcd
     # o3d.visualization.draw_geometries([pcd])
@@ -367,7 +367,7 @@ def test6_histograms_atlas():
     pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
 
     _, new_pcd = histogram_features(pcd)
-    new_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
+    # new_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
     good_lines = []
     while True:
         points = pick_points(new_pcd)
@@ -392,6 +392,17 @@ def test6_histograms_atlas():
         good_lines.append(lineset)
         o3d.visualization.draw_geometries([pcd]+good_lines)
 
+def resample_pcd(pcd):
+    numpy_source = np.asarray(pcd.points)
+    numpy_source = numpy_source[numpy_source[:, 2] > 400]
+    numpy_source = numpy_source[numpy_source[:, 2] < 601]
+    resample = 0.1
+    normal_rad = 20
+    pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
+    pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
+    pcd.paint_uniform_color([0.1, 0.1, 0.1])
+    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
+    return pcd
 if __name__ == "__main__":
 
     # test1_get_some_bones()
@@ -400,3 +411,9 @@ if __name__ == "__main__":
     # test4_test_random_dir()
     # test5_atlas()
     test6_histograms_atlas()
+    # pcd1 = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    # pcd2= o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
+    # pcd1 = histogram_features(resample_pcd(pcd1))[1]
+    # pcd2 = histogram_features(resample_pcd(pcd2))[1]
+    # pcd2.translate((500, 0, 0))
+    # o3d.visualization.draw([pcd1,pcd2])
