@@ -7,12 +7,12 @@ import tqdm
 import random
 from sklearn.cluster import AgglomerativeClustering
 import glob, os
-import create_atlas
+from create_atlas import histogram_features
 
 class HyperSkeleton:
     def __init__(self, normal_rad=10):
         self.normal_rad = normal_rad
-        self.resample = 1
+        self.resample = 0.2
         self.max_iter = 10000
         self.atlas = o3d.geometry.LineSet()
         self.skeleton_graph = nx.DiGraph()
@@ -85,22 +85,17 @@ class HyperSkeleton:
         else:
             return float("infinity")
     def calculate_line_options(self):
+        histogram_pcd = histogram_features(self.pcd, self.normal_rad,0)[1]
         for line_index in range(np.asarray(self.atlas.lines).shape[0]):
             line_options = []
             transforms = []
-            bone_line = np.asarray(self.atlas.lines)[line_index]
-            bone_line_numpy = self.atlas.get_line_coordinate(bone_line[0])[1] -\
-                              self.atlas.get_line_coordinate(bone_line[0])[0]
+            bone_line_numpy = self.atlas.get_line_coordinate(line_index)[1] - self.atlas.get_line_coordinate(line_index)[0]
             # filter the non normals
-            filtered_pcd = self._remove_non_normals(self.pcd, bone_line_numpy, self.normal_rad)
+            # filtered_pcd = self._remove_non_normals(self.pcd, bone_line_numpy, self.normal_rad)
             # calculate the clusters
-            try:
-                filtered_pcd, clusters_index = self._get_bone_clusters(filtered_pcd, bone_line_numpy)
-            except ValueError:
-                print("bad atlas line: " +str(line_index))
-                raise ValueError
+            filtered_pcd, clusters_index = self._get_bone_clusters(histogram_pcd.__copy__(), bone_line_numpy)
             # for each cluster
-            bone_line_numpy = np.array([self.atlas.get_line_coordinate(bone_line[0])[1], self.atlas.get_line_coordinate(bone_line[0])[0]])
+            bone_line_numpy = np.array([self.atlas.get_line_coordinate(line_index)[1], self.atlas.get_line_coordinate(line_index)[0]])
             for cluster_index in clusters_index:
 
                 # find the best line for the cluster
@@ -176,7 +171,7 @@ class HyperSkeleton:
 
     def _loss_mse(self, child_node):
         # get current bone indexes
-        node_trasform = self.skeleton_graph.nodes[child_node]["transform"]
+        node_transform = self.skeleton_graph.nodes[child_node]["transform"]
         loss = []
         # get the rest of the bones from the tree, that connect to the current bone
         ancestors = nx.ancestors(self.skeleton_graph, child_node)
@@ -187,7 +182,7 @@ class HyperSkeleton:
             node_line_index = self.skeleton_graph.nodes[node]["atlas_index"]
             atlas_lineset = self.atlas.get_line_coordinate(node_line_index)
 
-            loss.append(np.linalg.norm((atlas_lineset - node_trasform) - result_lineset.get_line_coordinate(0)))
+            loss.append(np.linalg.norm((atlas_lineset - node_transform) - result_lineset.get_line_coordinate(0)))
 
         if len(loss) == 0:
             total_loss = 5
@@ -200,22 +195,22 @@ class HyperSkeleton:
         ancestors = nx.ancestors(self.skeleton_graph, node_key)
         ancestors.add(node_key)
         ancestors.remove(0)
-        if len(ancestors) > 0:
-            preselected_bones_indexes = [self.skeleton_graph.nodes[node]["atlas_index"] for node in ancestors]
-            # find bones that are near the preselected, but aren't selected
-            preselected_bones = np.asarray(self.atlas.lines)[preselected_bones_indexes]
-            options = [option for option in np.asarray(self.atlas.lines) if (option[0] in preselected_bones or
-                       option[1] in preselected_bones) and
-                       option not in preselected_bones]
-        else:
-            options = list(np.asarray(self.atlas.lines))
+        # if len(ancestors) > 0:
+        preselected_bones_indexes = [self.skeleton_graph.nodes[node]["atlas_index"] for node in ancestors]
+        # find bones that are near the preselected, but aren't selected
+        options = [option for option in self.option_dict.keys() if option not in preselected_bones_indexes]
+        # else:
+        #     options = list(np.asarray(self.atlas.lines))
         if len(options) == 0:
             print ("error")
         selected_bone = random.choice(options)
 
         index = np.where(np.asarray(self.atlas.lines) == selected_bone)[0][0]
         new_bone = o3d.geometry.LineSet()
-        new_bone.points = o3d.utility.Vector3dVector(np.asarray(self.atlas.points)[selected_bone])
+        try:
+            new_bone.points = o3d.utility.Vector3dVector(self.atlas.get_line_coordinate(selected_bone))
+        except:
+            print("error")
         new_bone.lines = o3d.utility.Vector2iVector([[0, 1]])
         return new_bone, index
 
@@ -223,7 +218,7 @@ class HyperSkeleton:
         pcd = o3d.io.read_point_cloud(path)
 
         numpy_source = np.asarray(pcd.points)
-        numpy_source = numpy_source[numpy_source[:, 2] > 300]
+        numpy_source = numpy_source[numpy_source[:, 2] > 400]
         numpy_source = numpy_source[numpy_source[:, 2] < 601]
 
         pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * self.resample))
@@ -236,35 +231,37 @@ class HyperSkeleton:
     def create_atlas(self):
         # resulting
         # lines
-        bone_points = np.array(
-         [[187, 282, 456],
-         [231, 187, 466],
-         [236, 177, 468],
-         [204, 166, 480],
-         [219, 165, 475],
-         [186, 180, 480],
-         [168, 189, 485],
-         [117, 181, 507],
-         # [119, 183, 504],
-         # [126, 236, 501],
-         # [161, 300, 558],
-         # [74, 194, 548],
-         [124, 244, 501],
-         [149, 272, 491],
-         [69, 220, 448],
-         [66, 133, 410],
-         [347, 264, 452],
-         [273, 172, 466]]
-        )
-        connection = np.arange(bone_points.shape[0]).reshape((-1,2))
-        # bone_points = np.array([[181.76923077, 313.03846154,550.23076923],
-        #                         [79.4875, 184.775, 542.45625],
-        #                         [126.25, 163.5, 515.75],
-        #                         [179.00625, 185.44791667, 497.09345238],
-        #                         [239.66666667, 131.33333333, 476.66666667],
-        #                         [237.24444444, 193.60520833, 465.11875],
-        #                         [183.13333333, 275.72982456, 472.12982456]])
-        # connection = np.array([[0, 1], [1, 2], [2, 3], [3, 4], [4, 5],[5,6]])
+        # [[187. 282. 456.]
+        #  [231. 187. 466.]]
+        # [[236. 177. 468.]
+        #  [204. 166. 480.]]
+        # [[219. 165. 475.]
+        #  [186. 180. 480.]]
+        # [[168. 189. 485.]
+        #  [117. 181. 507.]]
+        # [[119. 183. 504.]
+        #  [126. 236. 501.]]
+        # [[161. 300. 558.]
+        #  [74. 194. 548.]]
+        # [[124. 244. 501.]
+        #  [149. 272. 491.]]
+        # [[69. 220. 448.]
+        #  [66. 133. 410.]]
+        # [[347. 264. 452.]
+        #  [273. 172. 466.]]
+        bone_points = np.array([[153, 287, 560],
+                                 [ 87, 222, 551],
+                                 [ 62, 271, 476],
+                                 [ 28, 232, 470],
+                                 [335, 250, 455],
+                                 [267, 166, 467],
+                                 # [113, 182, 507],
+                                 # [128, 257, 497],
+                                 [264, 305, 541],
+                                 [230, 272, 546],
+                                 [176, 174, 484],
+                                 [222, 163, 475]])
+        connection = np.arange(bone_points.shape[0]).reshape(-1,2)
         self.atlas.points = o3d.utility.Vector3dVector(bone_points)
         self.atlas.lines = o3d.utility.Vector2iVector(connection)
         self.atlas.paint_uniform_color([0, 1, 1])
@@ -272,6 +269,7 @@ class HyperSkeleton:
     def _get_bone_clusters(self, pcd, bone_line, cluster_dist=20):
 
         bone_tree = o3d.geometry.KDTreeFlann(pcd)
+        pcd.paint_uniform_color([0,0,0])
         choosen_points = []
         choosen_indexes = []
         for point_index in tqdm.tqdm(range(np.asarray(pcd.points).shape[0])):
@@ -282,23 +280,31 @@ class HyperSkeleton:
             dists = lineseg_dists(np.asarray(pcd.points)[nie[1:], :],
                                   np.asarray(pcd.points)[point_index] + bone_line / 2,
                                   np.asarray(pcd.points)[point_index] - bone_line / 2)
-            if (dists < 1).sum() > np.linalg.norm(bone_line) / 10:
+            if (dists < 2).sum() > np.linalg.norm(bone_line):
                 np.asarray(pcd.colors)[point_index] = [1, 0, 0]
                 choosen_points.append(np.asarray(pcd.points)[point_index])
                 choosen_indexes.append(point_index)
 
         choosen_points = np.array(choosen_points)
         choosen_indexes = np.array(choosen_indexes)
-        if len(choosen_points) ==0:
-            raise ValueError()
         clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=cluster_dist, linkage="single").fit(
             choosen_points)
 
         clusters = []
         for cluster_index in range(clustering.n_clusters_):
             cluster = choosen_indexes[clustering.labels_ == cluster_index]
-            if cluster.shape[0] < 2:
+            if cluster.shape[0] < 10:
                 continue
+
+            b = lineseg_dists(np.asarray(pcd.points)[cluster],
+                              np.mean(np.asarray(pcd.points)[cluster], axis=0) + bone_line / 2,
+                              np.mean(np.asarray(pcd.points)[cluster], axis=0) - bone_line / 2, True)
+            a = lineseg_dists(np.asarray(pcd.points)[cluster],
+                              np.mean(np.asarray(pcd.points)[cluster], axis=0) + bone_line / 2,
+                              np.mean(np.asarray(pcd.points)[cluster], axis=0) - bone_line / 2, False)
+            if np.mean(b-a,axis=0)>1:
+                continue
+
             clusters.append(cluster)
         colors = np.random.random((clustering.labels_.shape[0],3))
         np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
@@ -319,27 +325,32 @@ class HyperSkeleton:
         return bone_pcd
 
 
-def lineseg_dists(p, a, b):
+def lineseg_dists(p, a, b, clamp=True):
+
     # TODO for you: consider implementing @Eskapp's suggestions
-    if np.all(a == b):
-        return np.linalg.norm(p - a, axis=1)
+    if clamp:
+        if np.all(a == b):
+            return np.linalg.norm(p - a, axis=-1)
 
-    # normalized tangent vector
-    d = np.divide(b - a, np.linalg.norm(b - a))
+        # normalized tangent vector
+        d = np.divide(b - a, np.linalg.norm(b - a))
 
-    # signed parallel distance components
-    s = np.dot(a - p, d)
-    t = np.dot(p - b, d)
+        # signed parallel distance components
+        s = np.dot(a - p, d)
+        t = np.dot(p - b, d)
 
-    # clamped parallel distance
-    h = np.maximum.reduce([s, t, np.zeros(len(p))])
-    h = np.expand_dims(h, axis=-1)
-    # perpendicular distance component, as before
-    # note that for the 3D case these will be vectors
-    c = np.cross(p - a, d)
+        # clamped parallel distance
+        h = np.maximum.reduce([s, t, np.zeros(len(p))])
 
-    # use hypot for Pythagoras to improve accuracy
-    return np.sqrt(np.sum(np.power(np.hypot(h, c), 2), axis=-1))
+        h = np.expand_dims(h,axis = -1)
+        # perpendicular distance component, as before
+        # note that for the 3D case these will be vectors
+        c = np.cross(p - a, d)
+
+        # use hypot for Pythagoras to improve accuracy
+        return np.sqrt(np.sum(np.power(np.hypot(h, c),2), axis=-1))
+    else:
+        return np.linalg.norm(np.cross(b-a, a-p), axis=-1)/np.linalg.norm(b-a, axis=-1)
 
 class NodeNameGen:
     def __init__(self):

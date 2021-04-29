@@ -10,7 +10,7 @@ import glob, os
 from scipy.spatial.transform import Rotation as R
 import networkx
 
-def histogram_features(pcd,rad = 15):
+def histogram_features(pcd,rad = 15,min_var =0.085):
     pcd.paint_uniform_color([0.0, 0.5, 0.5])
     num_bins = 8
     min_var = 0.085
@@ -47,27 +47,32 @@ def histogram_features(pcd,rad = 15):
     # colors_idx = np.random.random((num_cluster,3))
     # pcd.colors = o3d.utility.Vector3dVector(colors_idx[prediction])
     return features, new_pcd
-def lineseg_dists(p, a, b):
+def lineseg_dists(p, a, b, clamp=True):
+
     # TODO for you: consider implementing @Eskapp's suggestions
-    if np.all(a == b):
-        return np.linalg.norm(p - a, axis=1)
+    if clamp:
+        if np.all(a == b):
+            return np.linalg.norm(p - a, axis=1)
 
-    # normalized tangent vector
-    d = np.divide(b - a, np.linalg.norm(b - a))
+        # normalized tangent vector
+        d = np.divide(b - a, np.linalg.norm(b - a))
 
-    # signed parallel distance components
-    s = np.dot(a - p, d)
-    t = np.dot(p - b, d)
+        # signed parallel distance components
+        s = np.dot(a - p, d)
+        t = np.dot(p - b, d)
 
-    # clamped parallel distance
-    h = np.maximum.reduce([s, t, np.zeros(len(p))])
-    h = np.expand_dims(h,axis = -1)
-    # perpendicular distance component, as before
-    # note that for the 3D case these will be vectors
-    c = np.cross(p - a, d)
+        # clamped parallel distance
+        h = np.maximum.reduce([s, t, np.zeros(len(p))])
 
-    # use hypot for Pythagoras to improve accuracy
-    return np.sqrt(np.sum(np.power(np.hypot(h, c),2), axis=-1))
+        h = np.expand_dims(h,axis = -1)
+        # perpendicular distance component, as before
+        # note that for the 3D case these will be vectors
+        c = np.cross(p - a, d)
+
+        # use hypot for Pythagoras to improve accuracy
+        return np.sqrt(np.sum(np.power(np.hypot(h, c),2), axis=-1))
+    else:
+        return np.linalg.norm(np.cross(b-a, a-p))/np.linalg.norm(b-a)
 
 def to_spherical(points, normalize_angles=True):
     points_spherical = np.zeros_like(points)
@@ -84,12 +89,6 @@ def to_spherical(points, normalize_angles=True):
     return points_spherical
 
 def pick_points(pcd):
-    print("")
-    print(
-        "1) Please pick at least three correspondences using [shift + left click]"
-    )
-    print("   Press [shift + right click] to undo point picking")
-    print("2) Afther picking points, press q for close the window")
     vis = o3d.visualization.VisualizerWithEditing()
     vis.create_window()
 
@@ -175,13 +174,14 @@ def check_full_bone(pcd,bone_line):
         dists = lineseg_dists(np.asarray(pcd.points)[nie[1:],:],
                       np.asarray(pcd.points)[point_index] + bone_line/2,
                       np.asarray(pcd.points)[point_index] - bone_line/2)
-        if (dists<1).sum()>np.linalg.norm(bone_line) / 20:
+        if (dists<1).sum()>5:
             np.asarray(pcd.colors)[point_index] = [1,0,0]
     return pcd
     # o3d.visualization.draw_geometries([pcd])
 
 def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
     bone_tree = o3d.geometry.KDTreeFlann(pcd)
+    pcd.paint_uniform_color((0,0,0))
     choosen_points = []
     choosen_indexes = []
     for point_index in tqdm.tqdm(range(np.asarray(pcd.points).shape[0])):
@@ -192,8 +192,8 @@ def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
         dists = lineseg_dists(np.asarray(pcd.points)[nie[1:], :],
                               np.asarray(pcd.points)[point_index] + bone_line / 2,
                               np.asarray(pcd.points)[point_index] - bone_line / 2)
-        if (dists < 1).sum() > np.linalg.norm(bone_line) / 20:
-            np.asarray(pcd.colors)[point_index] = [1, 0, 0]
+        if (dists < 3).sum() > np.linalg.norm(bone_line)/2:
+            np.asarray(pcd.colors)[point_index] = np.array([1, 0, 0])
             choosen_points.append(np.asarray(pcd.points)[point_index])
             choosen_indexes.append(point_index)
 
@@ -209,8 +209,8 @@ def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
         if cluster.shape[0]<5:
             continue
         clusters.append(cluster)
-    colors = np.random.random((clustering.labels_.shape[0],3))
-    np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
+    # colors = np.random.random((clustering.labels_.shape[0],3))
+    # np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
 
     # print(len(choosen_points))
     return pcd, clusters
@@ -336,7 +336,6 @@ def test5_atlas():
     source.paint_uniform_color([0.1, 0.1, 0.1])
     source.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
     previous_options = []
-    selected = []
     for bone_index in range(6):
         np.asarray(lineset.colors)[bone_index] = np.array([1,0,0])
         bone_line = np.array(bone_points[bone_index] - bone_points[bone_index+1])
@@ -351,7 +350,6 @@ def test5_atlas():
         # lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
         # selected.append(lineset)
 
-        selected.append(pcd)
         o3d.visualization.draw_geometries([pcd, lineset])
 
 def test6_histograms_atlas():
@@ -359,7 +357,7 @@ def test6_histograms_atlas():
     numpy_source = np.asarray(pcd.points)
     numpy_source = numpy_source[numpy_source[:, 2] > 400]
     numpy_source = numpy_source[numpy_source[:, 2] < 601]
-    resample = 0.25
+    resample = 0.1
     normal_rad = 20
     pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
     pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
@@ -383,8 +381,8 @@ def test6_histograms_atlas():
         bone_line = np.asarray(new_pcd.points)[points[0]] - np.asarray(new_pcd.points)[points[1]]
         print(bone_line)
 
-        pcd = remove_non_normals(new_pcd, bone_line)
-        pcd = check_full_bone(pcd, bone_line)
+        # pcd = remove_non_normals(new_pcd, bone_line)
+        pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
         lineset = o3d.geometry.LineSet()
         lineset.points = o3d.utility.Vector3dVector([np.asarray(new_pcd.points)[points[0]],
                                                      np.asarray(new_pcd.points)[points[1]]])
@@ -392,7 +390,8 @@ def test6_histograms_atlas():
         good_lines.append(lineset)
         o3d.visualization.draw_geometries([pcd]+good_lines)
 
-def resample_pcd(pcd):
+def test_atlas():
+    pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
     numpy_source = np.asarray(pcd.points)
     numpy_source = numpy_source[numpy_source[:, 2] > 400]
     numpy_source = numpy_source[numpy_source[:, 2] < 601]
@@ -402,7 +401,32 @@ def resample_pcd(pcd):
     pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
     pcd.paint_uniform_color([0.1, 0.1, 0.1])
     pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
-    return pcd
+
+    _, new_pcd = histogram_features(pcd)
+    atlas =                  np.array([[153, 287, 560],
+                                 [ 87, 222, 551],
+                                 [ 62, 271, 476],
+                                 [ 28, 232, 470],
+                                 [335, 250, 455],
+                                 [267, 166, 467],
+                                 [113, 182, 507],
+                                 [128, 257, 497],
+                                 [264, 305, 541],
+                                 [230, 272, 546],
+                                 [176, 174, 484],
+                                 [222, 163, 475]])
+    # new_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
+    good_lines = []
+    for i in range(0,len(atlas),2):
+        bone_line = np.asarray(atlas[i+1]) - np.asarray(atlas[i])
+
+        # pcd = remove_non_normals(new_pcd, bone_line)
+        pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
+        lineset = o3d.geometry.LineSet()
+        lineset.points = o3d.utility.Vector3dVector([atlas[i+1], atlas[i]])
+        lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
+        good_lines.append(lineset)
+        o3d.visualization.draw_geometries([pcd]+good_lines)
 if __name__ == "__main__":
 
     # test1_get_some_bones()
@@ -410,10 +434,5 @@ if __name__ == "__main__":
     # test3_clqqqustering()
     # test4_test_random_dir()
     # test5_atlas()
-    test6_histograms_atlas()
-    # pcd1 = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    # pcd2= o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
-    # pcd1 = histogram_features(resample_pcd(pcd1))[1]
-    # pcd2 = histogram_features(resample_pcd(pcd2))[1]
-    # pcd2.translate((500, 0, 0))
-    # o3d.visualization.draw([pcd1,pcd2])
+    # test6_histograms_atlas()
+    test_atlas()
