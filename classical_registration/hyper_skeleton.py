@@ -12,17 +12,17 @@ from create_atlas import histogram_features
 class HyperSkeleton:
     def __init__(self, normal_rad=10):
         self.normal_rad = normal_rad
-        self.resample = 0.2
+        self.resample = 0.1
         self.max_iter = 10000
         self.atlas = o3d.geometry.LineSet()
+        self.rbfs = None
         self.skeleton_graph = nx.DiGraph()
         self.skeleton_graph.add_node(0, prob=0, pos=None, atlas_index=None, loss=0)
         self.pcd = None
         self.create_atlas()
         self.node_name_gen = NodeNameGen()
-        self.option_dict = {}  # line_index: [lineset, lineset, lineset...]
-        self.transform_dict = {} # line_index: [np.array(3),....]
-        self.loss_stopping_condition = 500
+        self.option_dict = {}  # line_index: [{"pos":lineset, "transform":numpy(3), "mean":numpy(3), "std":numpy(3)},]
+        self.loss_stopping_condition = 600
         self.best_result = []
     def scan(self, pcd_path):
         # get the pcd from path
@@ -49,7 +49,7 @@ class HyperSkeleton:
         pos = hierarchy_pos(self.skeleton_graph, 0)
         nx.draw(self.skeleton_graph, pos,labels=nx.get_node_attributes(self.skeleton_graph,"loss"))
     def visualize_results(self):
-        results = [self.pcd]
+        results = [self.pcd,self.atlas]
         for node in self.best_result:
             if node ==0:
                 continue
@@ -109,10 +109,8 @@ class HyperSkeleton:
                 lineset.points = o3d.utility.Vector3dVector(new_bone_line)
                 lineset.lines = o3d.utility.Vector2iVector([[0, 1]])
 
-                line_options.append(lineset)
-                transforms.append(transform)
+                line_options.append({"pos":lineset, "transform":transform, "mean":mean_point, "std":points.std(axis=0)})
             self.option_dict[line_index] = line_options
-            self.transform_dict[line_index] = transforms
 
 
     def _expand_node(self, node_key, pcd):
@@ -124,9 +122,11 @@ class HyperSkeleton:
 
         for line_option_index in range(len(self.option_dict[line_index])):
             node_name = self.node_name_gen()
-            self.skeleton_graph.add_node(node_name, pos=self.option_dict[line_index][line_option_index],
+            self.skeleton_graph.add_node(node_name, pos=self.option_dict[line_index][line_option_index]["pos"],
                                         atlas_index=line_index,
-                                         transform=self.transform_dict[line_index][line_option_index]
+                                         transform=self.option_dict[line_index][line_option_index]["transform"],
+                                         mean=self.option_dict[line_index][line_option_index]["mean"],
+                                         std=self.option_dict[line_index][line_option_index]["std"]
                                          )
             # calculate the probability that this line matches the parent node
             self.skeleton_graph.add_edge(node_key, node_name)
@@ -178,11 +178,12 @@ class HyperSkeleton:
         ancestors.remove(0)
 
         for node in ancestors:
-            result_lineset = self.skeleton_graph.nodes[node]["pos"]
             node_line_index = self.skeleton_graph.nodes[node]["atlas_index"]
+            result_lineset = self.skeleton_graph.nodes[node]["pos"]
             atlas_lineset = self.atlas.get_line_coordinate(node_line_index)
-
-            loss.append(np.linalg.norm((atlas_lineset - node_transform) - result_lineset.get_line_coordinate(0)))
+            space_loss = np.linalg.norm((atlas_lineset - node_transform) - result_lineset.get_line_coordinate(0))
+            rbf_loss = np.linalg.norm(self.skeleton_graph.nodes[node]["std"] - self.rbfs[node_line_index]["std"])
+            loss.append(rbf_loss+space_loss*0.1)
 
         if len(loss) == 0:
             total_loss = 5
@@ -249,19 +250,41 @@ class HyperSkeleton:
         #  [66. 133. 410.]]
         # [[347. 264. 452.]
         #  [273. 172. 466.]]
-        bone_points = np.array([[153, 287, 560],
-                                 [ 87, 222, 551],
-                                 [ 62, 271, 476],
-                                 [ 28, 232, 470],
-                                 [335, 250, 455],
-                                 [267, 166, 467],
-                                 # [113, 182, 507],
-                                 # [128, 257, 497],
-                                 [264, 305, 541],
-                                 [230, 272, 546],
-                                 [176, 174, 484],
-                                 [222, 163, 475]])
+        bone_points = np.array( [[336, 257, 453],
+                                 [275, 173, 466],
+                                 [ 64, 271, 473],
+                                 [ 27, 232, 471],
+                                 [163, 298, 553],
+                                 [ 95, 228, 556],
+                                 [356, 309, 521],
+                                 [375, 214, 509],
+                                 [450, 228, 463],
+                                 [415, 176, 447],
+                                 [148, 267, 486],
+                                 [113, 208, 505],
+                                 [460, 173, 538],
+                                 [427, 106, 522],
+                                 [215, 214, 462],
+                                 [245, 160, 466]])
         connection = np.arange(bone_points.shape[0]).reshape(-1,2)
+        self.rbfs = [
+            {'mean': np.array([298.29530201, 204.56375839, 460.02684564]),
+              'std': np.array([19.58272878, 25.13168597, 4.16270806])},
+            {'mean': np.array([41.68888889, 250.75555556, 469.26666667]),
+              'std': np.array([8.26726402, 9.3622304, 2.39814743])},
+            {'mean': np.array([121.67379679, 254.06417112, 551.24064171]),
+              'std': np.array([23.10278146, 30.44528975, 6.13405115])},
+            {'mean': np.array([363.70642202, 255.9266055, 519.5412844]),
+              'std': np.array([3.14862065, 15.39492733, 2.0788675])},
+            {'mean': np.array([430.07222222, 194.52777778, 451.53333333]),
+              'std': np.array([9.01667009, 12.33127485, 8.80933848])},
+            {'mean': np.array([125.03875969, 241.95348837, 498.12403101]),
+              'std': np.array([8.03037171, 14.10473584, 4.66391018])},
+            {'mean': np.array([457.92105263, 145.43421053, 531.81578947]),
+              'std': np.array([5.03086044, 10.71316888, 2.78487705])},
+            {'mean': np.array([239.68852459, 171.98360656, 466.49180328]),
+              'std': np.array([6.88200548, 13.55437356, 1.62584607])}
+        ]
         self.atlas.points = o3d.utility.Vector3dVector(bone_points)
         self.atlas.lines = o3d.utility.Vector2iVector(connection)
         self.atlas.paint_uniform_color([0, 1, 1])
@@ -280,7 +303,7 @@ class HyperSkeleton:
             dists = lineseg_dists(np.asarray(pcd.points)[nie[1:], :],
                                   np.asarray(pcd.points)[point_index] + bone_line / 2,
                                   np.asarray(pcd.points)[point_index] - bone_line / 2)
-            if (dists < 2).sum() > np.linalg.norm(bone_line):
+            if (dists < 3).sum() > np.linalg.norm(bone_line)/2:
                 np.asarray(pcd.colors)[point_index] = [1, 0, 0]
                 choosen_points.append(np.asarray(pcd.points)[point_index])
                 choosen_indexes.append(point_index)
@@ -295,15 +318,15 @@ class HyperSkeleton:
             cluster = choosen_indexes[clustering.labels_ == cluster_index]
             if cluster.shape[0] < 10:
                 continue
-
-            b = lineseg_dists(np.asarray(pcd.points)[cluster],
-                              np.mean(np.asarray(pcd.points)[cluster], axis=0) + bone_line / 2,
-                              np.mean(np.asarray(pcd.points)[cluster], axis=0) - bone_line / 2, True)
-            a = lineseg_dists(np.asarray(pcd.points)[cluster],
-                              np.mean(np.asarray(pcd.points)[cluster], axis=0) + bone_line / 2,
-                              np.mean(np.asarray(pcd.points)[cluster], axis=0) - bone_line / 2, False)
-            if np.mean(b-a,axis=0)>1:
-                continue
+        #
+        #     b = lineseg_dists(np.asarray(pcd.points)[cluster],
+        #                       np.mean(np.asarray(pcd.points)[cluster], axis=0) + bone_line / 2,
+        #                       np.mean(np.asarray(pcd.points)[cluster], axis=0) - bone_line / 2, True)
+        #     a = lineseg_dists(np.asarray(pcd.points)[cluster],
+        #                       np.mean(np.asarray(pcd.points)[cluster], axis=0) + bone_line / 2,
+        #                       np.mean(np.asarray(pcd.points)[cluster], axis=0) - bone_line / 2, False)
+        #     if np.mean(b-a,axis=0)>1:
+        #         continue
 
             clusters.append(cluster)
         colors = np.random.random((clustering.labels_.shape[0],3))
@@ -427,3 +450,4 @@ def hierarchy_pos(G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5)
 if __name__ == "__main__":
     hs = HyperSkeleton()
     hs.scan(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    # hs.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")

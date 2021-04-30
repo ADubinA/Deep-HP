@@ -367,22 +367,45 @@ def test6_histograms_atlas():
     _, new_pcd = histogram_features(pcd)
     # new_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
     good_lines = []
+    gausses = []
     while True:
         points = pick_points(new_pcd)
 
         if len(points)<2:
             good_lines.pop(-1)
+            gausses.pop(-1)
             continue
         if len(points)>3:
             print("resulting lines")
             for good_line in good_lines:
                 print(np.asarray(good_line.points))
-            break
+            print("resulting gausses")
+            for gauss in gausses:
+                print(gauss)
         bone_line = np.asarray(new_pcd.points)[points[0]] - np.asarray(new_pcd.points)[points[1]]
         print(bone_line)
 
         # pcd = remove_non_normals(new_pcd, bone_line)
         pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
+
+        # find the best cluster for the line (spataily)
+        best_dist = float("inf")
+        best_cluster = None
+        for cluster in clusters_index:
+            dist = lineseg_dists(np.asarray(pcd.points)[cluster],
+                          np.asarray(new_pcd.points)[points[0]],
+                          np.asarray(new_pcd.points)[points[1]])
+            if np.sum((np.where(dist<0.1)))>20:
+                best_cluster = cluster
+                break
+            if best_dist>dist.mean(axis=0):
+                best_dist = dist.mean(axis=0)
+                best_cluster = cluster
+
+        gausses.append({"mean":np.asarray(pcd.points)[best_cluster].mean(axis=0),
+                   "std":np.asarray(pcd.points)[best_cluster].std(axis=0)})
+        pcd.paint_uniform_color((0,0,0))
+        np.asarray(pcd.colors)[best_cluster] = np.array([1,0,0])
         lineset = o3d.geometry.LineSet()
         lineset.points = o3d.utility.Vector3dVector([np.asarray(new_pcd.points)[points[0]],
                                                      np.asarray(new_pcd.points)[points[1]]])
@@ -390,43 +413,7 @@ def test6_histograms_atlas():
         good_lines.append(lineset)
         o3d.visualization.draw_geometries([pcd]+good_lines)
 
-def test_atlas():
-    pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    numpy_source = np.asarray(pcd.points)
-    numpy_source = numpy_source[numpy_source[:, 2] > 400]
-    numpy_source = numpy_source[numpy_source[:, 2] < 601]
-    resample = 0.1
-    normal_rad = 20
-    pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
-    pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
-    pcd.paint_uniform_color([0.1, 0.1, 0.1])
-    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
 
-    _, new_pcd = histogram_features(pcd)
-    atlas =                  np.array([[153, 287, 560],
-                                 [ 87, 222, 551],
-                                 [ 62, 271, 476],
-                                 [ 28, 232, 470],
-                                 [335, 250, 455],
-                                 [267, 166, 467],
-                                 [113, 182, 507],
-                                 [128, 257, 497],
-                                 [264, 305, 541],
-                                 [230, 272, 546],
-                                 [176, 174, 484],
-                                 [222, 163, 475]])
-    # new_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
-    good_lines = []
-    for i in range(0,len(atlas),2):
-        bone_line = np.asarray(atlas[i+1]) - np.asarray(atlas[i])
-
-        # pcd = remove_non_normals(new_pcd, bone_line)
-        pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
-        lineset = o3d.geometry.LineSet()
-        lineset.points = o3d.utility.Vector3dVector([atlas[i+1], atlas[i]])
-        lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
-        good_lines.append(lineset)
-        o3d.visualization.draw_geometries([pcd]+good_lines)
 if __name__ == "__main__":
 
     # test1_get_some_bones()
@@ -434,5 +421,4 @@ if __name__ == "__main__":
     # test3_clqqqustering()
     # test4_test_random_dir()
     # test5_atlas()
-    # test6_histograms_atlas()
-    test_atlas()
+    test6_histograms_atlas()
