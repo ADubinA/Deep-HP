@@ -13,7 +13,9 @@ class HyperSkeleton:
     def __init__(self, normal_rad=10):
         self.normal_rad = normal_rad
         self.resample = 0.1
+        self.loss_stopping_condition = 600
         self.max_iter = 10000
+        self.loss_mse_value = 0.1
         self.atlas = o3d.geometry.LineSet()
         self.rbfs = None
         self.skeleton_graph = nx.DiGraph()
@@ -22,8 +24,8 @@ class HyperSkeleton:
         self.create_atlas()
         self.node_name_gen = NodeNameGen()
         self.option_dict = {}  # line_index: [{"pos":lineset, "transform":numpy(3), "mean":numpy(3), "std":numpy(3)},]
-        self.loss_stopping_condition = 600
         self.best_result = []
+
     def scan(self, pcd_path):
         # get the pcd from path
         self.pcd = self.load_image(pcd_path)
@@ -47,7 +49,7 @@ class HyperSkeleton:
 
     def visualize_graph(self):
         pos = hierarchy_pos(self.skeleton_graph, 0)
-        nx.draw(self.skeleton_graph, pos,labels=nx.get_node_attributes(self.skeleton_graph,"loss"))
+        nx.draw(self.skeleton_graph, pos,labels=nx.get_node_attributes(self.skeleton_graph,"text"))
     def visualize_results(self):
         results = [self.pcd,self.atlas]
         for node in self.best_result:
@@ -58,6 +60,7 @@ class HyperSkeleton:
             results.append(self.skeleton_graph.nodes[node]["pos"])
 
         o3d.visualization.draw_geometries(results)
+        self.visualize_graph()
 
 
     def _skeleton_tree_dist(self, u,v,d):
@@ -67,12 +70,14 @@ class HyperSkeleton:
         best_loss = float("infinity")
         if len(dag_longest_path(self.skeleton_graph)) > len(self.atlas.lines):
             leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0]
+            best_leaf = None
             for leaf_node in leaf_nodes:
                 loss = self._branch_loss(leaf_node)
                 if loss<best_loss:
                     best_loss = loss
+                    best_leaf = leaf_node
         if best_loss <self.loss_stopping_condition:
-            self.best_result = nx.shortest_path(self.skeleton_graph, 0, leaf_node)
+            self.best_result = nx.shortest_path(self.skeleton_graph, 0, best_leaf)
             return True
         return False
     def _branch_loss(self, end_node):
@@ -130,8 +135,9 @@ class HyperSkeleton:
                                          )
             # calculate the probability that this line matches the parent node
             self.skeleton_graph.add_edge(node_key, node_name)
+            loss = self._loss_mse(node_name)
             nx.set_node_attributes(self.skeleton_graph,
-                                   {node_name: {"loss": self._loss_mse(node_name)}})
+                                   {node_name: {"loss": loss, "text": int(loss)}})
 
 
     def _calculate_loss(self, child_node):
@@ -183,12 +189,17 @@ class HyperSkeleton:
             atlas_lineset = self.atlas.get_line_coordinate(node_line_index)
             space_loss = np.linalg.norm((atlas_lineset - node_transform) - result_lineset.get_line_coordinate(0))
             rbf_loss = np.linalg.norm(self.skeleton_graph.nodes[node]["std"] - self.rbfs[node_line_index]["std"])
-            loss.append(rbf_loss+space_loss*0.1)
+            loss.append(rbf_loss+space_loss*self.loss_mse_value)
 
         if len(loss) == 0:
-            total_loss = 5
+            total_loss = 0
         else:
             total_loss = sum(loss)/len(loss)
+
+        node_line_index = self.skeleton_graph.nodes[child_node]["atlas_index"]
+        self_loss = rbf_loss = np.linalg.norm(
+            self.skeleton_graph.nodes[child_node]["std"] - self.rbfs[node_line_index]["std"])
+        total_loss +=self_loss
         return total_loss
 
     def _get_bone_from_atlas(self, node_key):
@@ -202,25 +213,20 @@ class HyperSkeleton:
         options = [option for option in self.option_dict.keys() if option not in preselected_bones_indexes]
         # else:
         #     options = list(np.asarray(self.atlas.lines))
-        if len(options) == 0:
-            print ("error")
         selected_bone = random.choice(options)
 
-        index = np.where(np.asarray(self.atlas.lines) == selected_bone)[0][0]
+        # index = np.where(np.asarray(self.atlas.lines) == selected_bone)[0][0]
         new_bone = o3d.geometry.LineSet()
-        try:
-            new_bone.points = o3d.utility.Vector3dVector(self.atlas.get_line_coordinate(selected_bone))
-        except:
-            print("error")
+        new_bone.points = o3d.utility.Vector3dVector(self.atlas.get_line_coordinate(selected_bone))
         new_bone.lines = o3d.utility.Vector2iVector([[0, 1]])
-        return new_bone, index
+        return new_bone, selected_bone#index
 
     def load_image(self, path):
         pcd = o3d.io.read_point_cloud(path)
 
         numpy_source = np.asarray(pcd.points)
-        numpy_source = numpy_source[numpy_source[:, 2] > 400]
-        numpy_source = numpy_source[numpy_source[:, 2] < 601]
+        # numpy_source = numpy_source[numpy_source[:, 2] > 400]
+        # numpy_source = numpy_source[numpy_source[:, 2] < 601]
 
         pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * self.resample))
         pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
@@ -316,7 +322,7 @@ class HyperSkeleton:
         clusters = []
         for cluster_index in range(clustering.n_clusters_):
             cluster = choosen_indexes[clustering.labels_ == cluster_index]
-            if cluster.shape[0] < 10:
+            if cluster.shape[0] < 5:
                 continue
         #
         #     b = lineseg_dists(np.asarray(pcd.points)[cluster],
