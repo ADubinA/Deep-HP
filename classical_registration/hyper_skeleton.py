@@ -13,13 +13,13 @@ class HyperSkeleton:
     def __init__(self, normal_rad=10):
         self.normal_rad = normal_rad
         self.resample = 0.1
-        self.loss_stopping_condition = 600
-        self.max_iter = 10000
+        self.loss_stopping_condition = 1000
+        self.max_iter = 1000
         self.loss_mse_value = 0.1
         self.atlas = o3d.geometry.LineSet()
         self.rbfs = None
         self.skeleton_graph = nx.DiGraph()
-        self.skeleton_graph.add_node(0, prob=0, pos=None, atlas_index=None, loss=0)
+        self.skeleton_graph.add_node(0, prob=0, pos=None, atlas_index=None, loss=0,end_node=False)
         self.pcd = None
         self.create_atlas()
         self.node_name_gen = NodeNameGen()
@@ -34,7 +34,8 @@ class HyperSkeleton:
         for _ in range(self.max_iter):
 
             # get the highest probability node in the graph
-            leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0]
+            leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0 and
+                          not self.skeleton_graph.nodes[x]["end_node"]]
             best_prob, best_node = min([(self.skeleton_graph.nodes[leaf_node]["loss"], leaf_node) for
                                         leaf_node in leaf_nodes], key=lambda x: x[0])
 
@@ -68,7 +69,7 @@ class HyperSkeleton:
 
     def _stopping_conditions(self, best_node):
         best_loss = float("infinity")
-        if len(dag_longest_path(self.skeleton_graph)) > len(self.atlas.lines):
+        if len(dag_longest_path(self.skeleton_graph)) > len(self.option_dict.keys()):
             leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0]
             best_leaf = None
             for leaf_node in leaf_nodes:
@@ -76,13 +77,13 @@ class HyperSkeleton:
                 if loss<best_loss:
                     best_loss = loss
                     best_leaf = leaf_node
+                    self.best_result = nx.shortest_path(self.skeleton_graph, 0, best_leaf)
         if best_loss <self.loss_stopping_condition:
-            self.best_result = nx.shortest_path(self.skeleton_graph, 0, best_leaf)
             return True
         return False
     def _branch_loss(self, end_node):
         path = nx.shortest_path(self.skeleton_graph, 0, end_node)
-        if len(path) > len(self.atlas.lines):
+        if len(path) > len(self.option_dict.keys()):
             loss = 0
             for node in path:
                 loss += self.skeleton_graph.nodes[node]["loss"]
@@ -99,6 +100,9 @@ class HyperSkeleton:
             # filtered_pcd = self._remove_non_normals(self.pcd, bone_line_numpy, self.normal_rad)
             # calculate the clusters
             filtered_pcd, clusters_index = self._get_bone_clusters(histogram_pcd.__copy__(), bone_line_numpy)
+            if filtered_pcd is None:
+                print(f"bone with index: {line_index} was not found")
+                continue
             # for each cluster
             bone_line_numpy = np.array([self.atlas.get_line_coordinate(line_index)[1], self.atlas.get_line_coordinate(line_index)[0]])
             for cluster_index in clusters_index:
@@ -120,7 +124,9 @@ class HyperSkeleton:
 
     def _expand_node(self, node_key, pcd):
         # if we been on all bones, don't expand
-        if len(nx.ancestors(self.skeleton_graph, node_key)) == len(self.atlas.lines):
+        if len(nx.ancestors(self.skeleton_graph, node_key)) == len(self.option_dict.keys()):
+            nx.set_node_attributes(self.skeleton_graph,
+                                   {node_key: {"end_node":True}})
             return
         _, line_index = self._get_bone_from_atlas(node_key)
         # choose a bone from the atlas
@@ -131,7 +137,8 @@ class HyperSkeleton:
                                         atlas_index=line_index,
                                          transform=self.option_dict[line_index][line_option_index]["transform"],
                                          mean=self.option_dict[line_index][line_option_index]["mean"],
-                                         std=self.option_dict[line_index][line_option_index]["std"]
+                                         std=self.option_dict[line_index][line_option_index]["std"],
+                                         end_node=False
                                          )
             # calculate the probability that this line matches the parent node
             self.skeleton_graph.add_edge(node_key, node_name)
@@ -314,6 +321,9 @@ class HyperSkeleton:
                 choosen_points.append(np.asarray(pcd.points)[point_index])
                 choosen_indexes.append(point_index)
 
+        if len(choosen_points)<3:
+            return None,None
+
         choosen_points = np.array(choosen_points)
         choosen_indexes = np.array(choosen_indexes)
         clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=cluster_dist, linkage="single").fit(
@@ -455,5 +465,5 @@ def hierarchy_pos(G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5)
 
 if __name__ == "__main__":
     hs = HyperSkeleton()
-    hs.scan(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    hs.scan(r"D:\visceral\full_skeletons\102901_CT_Wb.ply")
     # hs.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
