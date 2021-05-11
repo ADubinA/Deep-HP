@@ -8,15 +8,17 @@ import random
 from sklearn.cluster import AgglomerativeClustering
 import glob, os
 from scipy.spatial.transform import Rotation as R
+import timeit
 import networkx
 
-def histogram_features(pcd,rad = 15,min_var =0.085):
+def histogram_features(pcd,rad = 10,min_var =0.085):
     pcd.paint_uniform_color([0.0, 0.5, 0.5])
-    num_bins = 8
-    min_var = 0.085
+    num_bins = 32
+    min_var = 0.08
     pcd_tree = o3d.geometry.KDTreeFlann(pcd)
     features = np.array([[]])
     good_indexes = []
+
     for point_index in tqdm.tqdm(range(np.asarray(pcd.points).shape[0])):
         [k, idx, _] = pcd_tree.search_radius_vector_3d(pcd.points[point_index], rad)
         if np.asarray(idx).shape[0]<10:
@@ -31,10 +33,12 @@ def histogram_features(pcd,rad = 15,min_var =0.085):
 
         good_indexes.append(point_index)
         bins = np.histogram2d(dist[:,1],dist[:,2],np.arange(num_bins)*1/num_bins, density=True)
-        try:
-            features = np.concatenate((features, np.expand_dims(bins[0], axis=0)))
-        except ValueError:
-            features = np.expand_dims(bins[0], axis=0)
+
+        # try:
+        #     features = np.concatenate((features, np.expand_dims(bins[0], axis=0)))
+        # except ValueError:
+        #     features = np.expand_dims(bins[0], axis=0)
+
         max_bin = np.unravel_index(np.argmax(bins[0], axis=None), bins[0].shape)
         np.asarray(pcd.colors)[point_index] = [bins[1][max_bin[0]],bins[2][max_bin[1]],0]
 

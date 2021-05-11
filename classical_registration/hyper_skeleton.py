@@ -31,7 +31,8 @@ class HyperSkeleton:
         self.pcd = self.load_image(pcd_path)
         self.calculate_line_options()
         # while probability is low
-        for _ in range(self.max_iter):
+        print("starting to match")
+        for _ in tqdm.tqdm(range(self.max_iter)):
 
             # get the highest probability node in the graph
             leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0 and
@@ -46,30 +47,49 @@ class HyperSkeleton:
 
         # print results
         print("finished")
-        self.visualize_results()
 
     def visualize_graph(self):
         pos = hierarchy_pos(self.skeleton_graph, 0)
         nx.draw(self.skeleton_graph, pos,labels=nx.get_node_attributes(self.skeleton_graph,"text"))
+
+    def vis_all_results(self):
+        leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0 and
+                                                                self.skeleton_graph.nodes[x]["end_node"]]
+        leaf_nodes = sorted(leaf_nodes,key=lambda x:self.skeleton_graph.nodes[x]["loss"])
+        for leaf_node in leaf_nodes:
+            results = [self.pcd,self.atlas]
+            for node in nx.shortest_path(self.skeleton_graph,0,leaf_node):
+                if node ==0:
+                    continue
+                line = self.skeleton_graph.nodes[node]["pos"]
+                line.paint_uniform_color([1,1,0])
+                results.append(line)
+
+            o3d.visualization.draw_geometries(results)
+
     def visualize_results(self):
+        save_folder = "D:\experiments\skeleton_reg_1"
         results = [self.pcd,self.atlas]
+        o3d.io.write_line_set(os.path.join(save_folder,"atlas.ply"),self.atlas)
+        o3d.io.write_point_cloud(os.path.join(save_folder,"pcd.ply"),self.pcd)
+
         for node in self.best_result:
             if node ==0:
                 continue
             line = self.skeleton_graph.nodes[node]["pos"]
             line.paint_uniform_color([1,1,0])
-            results.append(self.skeleton_graph.nodes[node]["pos"])
+            results.append(line)
+            o3d.io.write_line_set(os.path.join(save_folder,str(node)+".ply"), line)
 
         o3d.visualization.draw_geometries(results)
         self.visualize_graph()
-
 
     def _skeleton_tree_dist(self, u,v,d):
         return self.skeleton_graph.nodes[u]["loss"] + self.skeleton_graph.nodes[u]["loss"]
 
     def _stopping_conditions(self, best_node):
         best_loss = float("infinity")
-        if len(dag_longest_path(self.skeleton_graph)) > len(self.option_dict.keys()):
+        if len(dag_longest_path(self.skeleton_graph)) > self._num_of_matches():
             leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0]
             best_leaf = None
             for leaf_node in leaf_nodes:
@@ -83,13 +103,15 @@ class HyperSkeleton:
         return False
     def _branch_loss(self, end_node):
         path = nx.shortest_path(self.skeleton_graph, 0, end_node)
-        if len(path) > len(self.option_dict.keys()):
+        if len(path) > self._num_of_matches():
             loss = 0
             for node in path:
                 loss += self.skeleton_graph.nodes[node]["loss"]
             return loss
         else:
             return float("infinity")
+    def _num_of_matches(self):
+        return len(self.option_dict.keys()) - 1
     def calculate_line_options(self):
         histogram_pcd = histogram_features(self.pcd, self.normal_rad,0)[1]
         for line_index in range(np.asarray(self.atlas.lines).shape[0]):
@@ -124,7 +146,7 @@ class HyperSkeleton:
 
     def _expand_node(self, node_key, pcd):
         # if we been on all bones, don't expand
-        if len(nx.ancestors(self.skeleton_graph, node_key)) == len(self.option_dict.keys()):
+        if len(nx.ancestors(self.skeleton_graph, node_key)) == self._num_of_matches():
             nx.set_node_attributes(self.skeleton_graph,
                                    {node_key: {"end_node":True}})
             return
@@ -465,5 +487,6 @@ def hierarchy_pos(G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5)
 
 if __name__ == "__main__":
     hs = HyperSkeleton()
-    hs.scan(r"D:\visceral\full_skeletons\102901_CT_Wb.ply")
-    # hs.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
+    # hs.scan(r"D:\visceral\full_skeletons\102901_CT_Wb.ply")
+    hs.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
+    hs.visualize_results()
