@@ -13,8 +13,8 @@ class HyperSkeleton:
     def __init__(self, normal_rad=10):
         self.normal_rad = normal_rad
         self.resample = 0.1
-        self.loss_stopping_condition = 1000
-        self.max_iter = 1000
+        self.stop_after_n_results =30
+        self.max_iter = 10000
         self.loss_mse_value = 0.1
         self.atlas = o3d.geometry.LineSet()
         self.rbfs = None
@@ -90,7 +90,7 @@ class HyperSkeleton:
     def _stopping_conditions(self, best_node):
         best_loss = float("infinity")
         if len(dag_longest_path(self.skeleton_graph)) > self._num_of_matches():
-            leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0]
+            leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.nodes[x]["end_node"]]
             best_leaf = None
             for leaf_node in leaf_nodes:
                 loss = self._branch_loss(leaf_node)
@@ -98,8 +98,9 @@ class HyperSkeleton:
                     best_loss = loss
                     best_leaf = leaf_node
                     self.best_result = nx.shortest_path(self.skeleton_graph, 0, best_leaf)
-        if best_loss <self.loss_stopping_condition:
-            return True
+
+            if len(leaf_nodes)>self.stop_after_n_results:
+                return True
         return False
     def _branch_loss(self, end_node):
         path = nx.shortest_path(self.skeleton_graph, 0, end_node)
@@ -485,8 +486,51 @@ def hierarchy_pos(G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5)
 
     return _hierarchy_pos(G, root, width, vert_gap, vert_loc, xcenter)
 
+def calculate_deformation(source, target):
+    """
+
+    :param source: what to transform
+    :type source: HyperSkeleton
+    :param target: where to transform
+    :type target: HyperSkeleton
+    :return:
+    :rtype:
+    """
+    # check that both have a best result
+    if len(source.best_result) == 0 or len(target.best_result) == 0:
+        raise ValueError("Skeletons faild to find results, or weren't processes.")
+    if 0 in source.best_result: source.best_result.remove(0)
+    if 0 in target.best_result: target.best_result.remove(0)
+    # get the skeletons that were found both in each skeleton
+    nodes_index_in_source = set(source.skeleton_graph.nodes[node]["atlas_index"] for node in source.best_result)
+    nodes_index_in_target = set(target.skeleton_graph.nodes[node]["atlas_index"] for node in target.best_result)
+    match_points_line_index = list(nodes_index_in_target.intersection(nodes_index_in_source))
+
+    # find outliers
+    # average transform
+    transforms = []
+    for line_index in match_points_line_index:
+        source_node = [node for node in source.best_result
+                        if source.skeleton_graph.nodes[node]["atlas_index"] == line_index][0]
+        target_node = [node for node in target.best_result
+                          if target.skeleton_graph.nodes[node]["atlas_index"] == line_index][0]
+        source_lineset = source.skeleton_graph.nodes[source_node]["pos"]
+        source_location =  np.asarray(source_lineset.points)[1]-np.asarray(source_lineset.points)[0]/2
+        target_lineset = target.skeleton_graph.nodes[target_node]["pos"]
+        target_location =  np.asarray(target_lineset.points)[1]-np.asarray(target_lineset.points)[0]/2
+
+        transforms.append(target_location - source_location)
+    transform = np.array(transforms).mean(axis=0)
+    return transform
+
 if __name__ == "__main__":
-    hs = HyperSkeleton()
-    # hs.scan(r"D:\visceral\full_skeletons\102901_CT_Wb.ply")
-    hs.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
-    hs.visualize_results()
+    hs1 = HyperSkeleton()
+    hs1.scan(r"D:\visceral\full_skeletons\102865_CT_Wb.ply")
+    hs2 = HyperSkeleton()
+    hs2.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
+    transform = calculate_deformation(hs1,hs2)
+    hs1.pcd.translate(transform)
+    hs1.pcd.paint_uniform_color([1,0,0])
+    hs2.pcd.paint_uniform_color([0, 1, 0])
+    o3d.visualization.draw_geometries([hs1.pcd,hs2.pcd])
+    # hs.vis_all_results()
