@@ -13,7 +13,7 @@ class HyperSkeleton:
     def __init__(self, normal_rad=10):
         self.normal_rad = normal_rad
         self.resample = 0.1
-        self.stop_after_n_results =30
+        self.stop_after_n_results =300
         self.max_iter = 10000
         self.loss_mse_value = 0.1
         self.atlas = o3d.geometry.LineSet()
@@ -51,7 +51,11 @@ class HyperSkeleton:
     def visualize_graph(self):
         pos = hierarchy_pos(self.skeleton_graph, 0)
         nx.draw(self.skeleton_graph, pos,labels=nx.get_node_attributes(self.skeleton_graph,"text"))
-
+    def transform(self, transform, is_translate=True):
+        if is_translate:
+            self.pcd.translate(transform)
+            for node in self.best_result:
+                self.skeleton_graph.nodes[node]["pos"].translate(transform)
     def vis_all_results(self):
         leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0 and
                                                                 self.skeleton_graph.nodes[x]["end_node"]]
@@ -67,11 +71,12 @@ class HyperSkeleton:
 
             o3d.visualization.draw_geometries(results)
 
-    def visualize_results(self):
-        save_folder = "D:\experiments\skeleton_reg_1"
+    def visualize_results(self, save_folder=None, return_list=False):
+
         results = [self.pcd,self.atlas]
-        o3d.io.write_line_set(os.path.join(save_folder,"atlas.ply"),self.atlas)
-        o3d.io.write_point_cloud(os.path.join(save_folder,"pcd.ply"),self.pcd)
+        if save_folder is not None:
+            # o3d.io.write_line_set(os.path.join(save_folder,"atlas.ply"),self.atlas)
+            o3d.io.write_point_cloud(os.path.join(save_folder,"pcd.ply"),self.pcd)
 
         for node in self.best_result:
             if node ==0:
@@ -79,10 +84,14 @@ class HyperSkeleton:
             line = self.skeleton_graph.nodes[node]["pos"]
             line.paint_uniform_color([1,1,0])
             results.append(line)
-            o3d.io.write_line_set(os.path.join(save_folder,str(node)+".ply"), line)
+            if save_folder is not None:
+                o3d.io.write_line_set(os.path.join(save_folder,str(node)+".ply"), line)
 
-        o3d.visualization.draw_geometries(results)
-        self.visualize_graph()
+        if return_list:
+            return results
+        else:
+            o3d.visualization.draw_geometries(results)
+            self.visualize_graph()
 
     def _skeleton_tree_dist(self, u,v,d):
         return self.skeleton_graph.nodes[u]["loss"] + self.skeleton_graph.nodes[u]["loss"]
@@ -140,6 +149,7 @@ class HyperSkeleton:
                 lineset = o3d.geometry.LineSet()
                 lineset.points = o3d.utility.Vector3dVector(new_bone_line)
                 lineset.lines = o3d.utility.Vector2iVector([[0, 1]])
+                lineset.colors =  o3d.utility.Vector3dVector([self.atlas.colors[line_index]])
 
                 line_options.append({"pos":lineset, "transform":transform, "mean":mean_point, "std":points.std(axis=0)})
             self.option_dict[line_index] = line_options
@@ -323,7 +333,16 @@ class HyperSkeleton:
         ]
         self.atlas.points = o3d.utility.Vector3dVector(bone_points)
         self.atlas.lines = o3d.utility.Vector2iVector(connection)
-        self.atlas.paint_uniform_color([0, 1, 1])
+        self.atlas.colors = o3d.utility.Vector3dVector([
+            [0.46187094, 0.89905526, 0.01094321],
+            [0.2255608, 0.84219461, 0.82536012],
+            [0.29807366, 0.68088116, 0.35159094],
+            [0.54948462, 0.90281757, 0.08577152],
+            [0.74742186, 0.34122003, 0.17802096],
+            [0.27439269, 0.91738129, 0.84353833],
+            [0.84334515, 0.03149153, 0.3369042],
+            [0.94871377, 0.19108551, 0.10399755]
+        ])
 
     def _get_bone_clusters(self, pcd, bone_line, cluster_dist=20):
 
@@ -525,12 +544,16 @@ def calculate_deformation(source, target):
 
 if __name__ == "__main__":
     hs1 = HyperSkeleton()
+    exp_save = r"D:\experiments\reg1"
     hs1.scan(r"D:\visceral\full_skeletons\102865_CT_Wb.ply")
     hs2 = HyperSkeleton()
     hs2.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
     transform = calculate_deformation(hs1,hs2)
-    hs1.pcd.translate(transform)
+
+    hs1.transform(transform)
     hs1.pcd.paint_uniform_color([1,0,0])
     hs2.pcd.paint_uniform_color([0, 1, 0])
-    o3d.visualization.draw_geometries([hs1.pcd,hs2.pcd])
+    results = hs1.visualize_results(save_folder=os.path.join(exp_save,"source"),return_list=True)
+    results.extend(hs2.visualize_results(save_folder=os.path.join(exp_save,"target"), return_list=True))
+    o3d.visualization.draw_geometries(results)
     # hs.vis_all_results()

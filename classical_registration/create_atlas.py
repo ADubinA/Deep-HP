@@ -417,6 +417,22 @@ def test6_histograms_atlas():
         good_lines.append(lineset)
         o3d.visualization.draw_geometries([pcd]+good_lines)
 
+def pcd_to_graph():
+    source = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    numpy_source = np.asarray(source.points)
+    numpy_source = numpy_source[numpy_source[:, 2] > 300]
+    numpy_source = numpy_source[numpy_source[:, 2] < 801]
+    resample = 0.75
+    source_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
+    source.points = o3d.utility.Vector3dVector(numpy_source[source_index])
+    source.paint_uniform_color([0.1, 0.1, 0.1])
+    source.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=10, max_nn=30))
+
+    radii = [2, 4, 8, 15]
+    rec_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+        source, o3d.utility.DoubleVector(radii))
+    o3d.visualization.draw_geometries([source, rec_mesh])
+
 
 if __name__ == "__main__":
 
@@ -425,4 +441,5 @@ if __name__ == "__main__":
     # test3_clqqqustering()
     # test4_test_random_dir()
     # test5_atlas()
-    test6_histograms_atlas()
+    # test6_histograms_atlas()
+    pcd_to_graph()
