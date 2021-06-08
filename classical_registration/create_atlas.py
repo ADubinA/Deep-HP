@@ -8,22 +8,22 @@ import random
 from sklearn.cluster import AgglomerativeClustering
 import glob, os
 from scipy.spatial.transform import Rotation as R
-import timeit
-import networkx
 
 def histogram_features(pcd,rad = 10,min_var =0.085):
     pcd.paint_uniform_color([0.0, 0.5, 0.5])
-    num_bins = 32
+    num_bins = 8
     min_var = 0.08
     pcd_tree = o3d.geometry.KDTreeFlann(pcd)
     features = np.array([[]])
     good_indexes = []
 
     for point_index in tqdm.tqdm(range(np.asarray(pcd.points).shape[0])):
+
         [k, idx, _] = pcd_tree.search_radius_vector_3d(pcd.points[point_index], rad)
         if np.asarray(idx).shape[0]<10:
             np.asarray(pcd.colors)[point_index] = np.array([0,0,0])
             continue
+
         dist = np.asarray(pcd.points)[idx[1:],:] - np.asarray(pcd.points)[idx[0]]
         dist = to_spherical(dist)
         dist[:,0] = 0
@@ -32,7 +32,8 @@ def histogram_features(pcd,rad = 10,min_var =0.085):
             continue
 
         good_indexes.append(point_index)
-        bins = np.histogram2d(dist[:,1],dist[:,2],np.arange(num_bins)*1/num_bins, density=True)
+
+        bins = np.histogram2d(dist[:,1],dist[:,2],np.arange(num_bins)*1/num_bins, density=True, range=(0,1))
 
         # try:
         #     features = np.concatenate((features, np.expand_dims(bins[0], axis=0)))
@@ -183,7 +184,7 @@ def check_full_bone(pcd,bone_line):
     return pcd
     # o3d.visualization.draw_geometries([pcd])
 
-def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
+def get_bone_clusters(pcd, bone_line, cluster_dist = 5):
     bone_tree = o3d.geometry.KDTreeFlann(pcd)
     pcd.paint_uniform_color((0,0,0))
     choosen_points = []
@@ -213,8 +214,8 @@ def get_bone_clusters(pcd, bone_line, cluster_dist = 20):
         if cluster.shape[0]<5:
             continue
         clusters.append(cluster)
-    # colors = np.random.random((clustering.labels_.shape[0],3))
-    # np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
+    colors = np.random.random((clustering.labels_.shape[0],3))
+    np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
 
     # print(len(choosen_points))
     return pcd, clusters
@@ -416,7 +417,55 @@ def test6_histograms_atlas():
         lineset.lines = o3d.utility.Vector2iVector(np.array([[0,1]]))
         good_lines.append(lineset)
         o3d.visualization.draw_geometries([pcd]+good_lines)
+def test7_minimal_direction_graph():
+    line_size = 30
+    pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    numpy_source = np.asarray(pcd.points)
+    # numpy_source = numpy_source[numpy_source[:, 2] > 400]
+    # numpy_source = numpy_source[numpy_source[:, 2] < 601]
+    resample = 0.2
+    normal_rad = 20
+    pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
+    pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
+    pcd.paint_uniform_color([0.1, 0.1, 0.1])
+    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
 
+    _, new_pcd = histogram_features(pcd)
+    good_lines = []
+    gausses = []
+    while True:
+        points = pick_points(new_pcd)
+        if len(points) < 2:
+            good_lines.pop(-1)
+            gausses.pop(-1)
+            continue
+        if len(points) > 3:
+            print("resulting lines")
+            for good_line in good_lines:
+                print(np.asarray(good_line.points))
+            print("resulting gausses")
+            for gauss in gausses:
+                print(gauss)
+        bone_line = np.random.rand(3)-1/2
+        bone_line = line_size*bone_line/np.linalg.norm(bone_line)
+        pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
+
+        gausses.append([])
+        cover_num = 0
+        for cluster in clusters_index:
+            if len(cluster)<5:
+                continue
+            gausses[len(good_lines)].append({"mean": np.asarray(pcd.points)[cluster].mean(axis=0),
+                                             "std": np.asarray(pcd.points)[cluster].std(axis=0)})
+            cover_num+=len(cluster)
+        if cover_num/len(pcd.points)>0.1:
+            print("good coverage")
+        lineset = o3d.geometry.LineSet()
+        lineset.points = o3d.utility.Vector3dVector([np.zeros((3)),
+                                                     bone_line])
+        lineset.lines = o3d.utility.Vector2iVector(np.array([[0, 1]]))
+        good_lines.append(lineset)
+        o3d.visualization.draw_geometries([pcd] + good_lines)
 def pcd_to_graph():
     source = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
     numpy_source = np.asarray(source.points)
@@ -442,4 +491,4 @@ if __name__ == "__main__":
     # test4_test_random_dir()
     # test5_atlas()
     # test6_histograms_atlas()
-    pcd_to_graph()
+    test7_minimal_direction_graph()

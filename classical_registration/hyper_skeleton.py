@@ -15,7 +15,7 @@ class HyperSkeleton:
         self.resample = 0.1
         self.stop_after_n_results =300
         self.max_iter = 10000
-        self.loss_mse_value = 0.1
+        self.loss_mse_value = 100
         self.atlas = o3d.geometry.LineSet()
         self.rbfs = None
         self.skeleton_graph = nx.DiGraph()
@@ -82,7 +82,6 @@ class HyperSkeleton:
             if node ==0:
                 continue
             line = self.skeleton_graph.nodes[node]["pos"]
-            line.paint_uniform_color([1,1,0])
             results.append(line)
             if save_folder is not None:
                 o3d.io.write_line_set(os.path.join(save_folder,str(node)+".ply"), line)
@@ -237,9 +236,9 @@ class HyperSkeleton:
             total_loss = sum(loss)/len(loss)
 
         node_line_index = self.skeleton_graph.nodes[child_node]["atlas_index"]
-        self_loss = rbf_loss = np.linalg.norm(
+        self_loss = np.linalg.norm(
             self.skeleton_graph.nodes[child_node]["std"] - self.rbfs[node_line_index]["std"])
-        total_loss +=self_loss
+        total_loss +=self_loss*self.loss_mse_value
         return total_loss
 
     def _get_bone_from_atlas(self, node_key):
@@ -548,6 +547,8 @@ if __name__ == "__main__":
     hs1.scan(r"D:\visceral\full_skeletons\102865_CT_Wb.ply")
     hs2 = HyperSkeleton()
     hs2.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
+    # hs2.visualize_results()
+
     transform = calculate_deformation(hs1,hs2)
 
     hs1.transform(transform)
@@ -556,4 +557,3 @@ if __name__ == "__main__":
     results = hs1.visualize_results(save_folder=os.path.join(exp_save,"source"),return_list=True)
     results.extend(hs2.visualize_results(save_folder=os.path.join(exp_save,"target"), return_list=True))
     o3d.visualization.draw_geometries(results)
-    # hs.vis_all_results()
