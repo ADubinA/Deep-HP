@@ -8,6 +8,7 @@ import random
 from sklearn.cluster import AgglomerativeClustering
 import glob, os
 from scipy.spatial.transform import Rotation as R
+import json
 
 def histogram_features(pcd,rad = 10,min_var =0.085):
     pcd.paint_uniform_color([0.0, 0.5, 0.5])
@@ -208,14 +209,20 @@ def get_bone_clusters(pcd, bone_line, cluster_dist = 5):
     choosen_indexes = np.array(choosen_indexes)
     clustering = AgglomerativeClustering(n_clusters=None,distance_threshold=cluster_dist, linkage="single").fit(choosen_points)
 
+    colors = np.random.random((clustering.labels_.shape[0],3))
+    np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
+
     clusters =[]
     for cluster_index in range(clustering.n_clusters_):
         cluster = choosen_indexes[clustering.labels_== cluster_index]
         if cluster.shape[0]<5:
+            np.asarray(pcd.colors)[cluster] = np.zeros(3)
+            continue
+        if np.asarray(pcd.points)[cluster].std(axis=0).max()<10:
+            np.asarray(pcd.colors)[cluster] = np.zeros(3)
             continue
         clusters.append(cluster)
-    colors = np.random.random((clustering.labels_.shape[0],3))
-    np.asarray(pcd.colors)[choosen_indexes] = colors[clustering.labels_]
+
 
     # print(len(choosen_points))
     return pcd, clusters
@@ -420,6 +427,7 @@ def test6_histograms_atlas():
 def test7_minimal_direction_graph():
     line_size = 30
     pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    save_path = r"D:\experiments\atlases\large_atlas.json"
     numpy_source = np.asarray(pcd.points)
     # numpy_source = numpy_source[numpy_source[:, 2] > 400]
     # numpy_source = numpy_source[numpy_source[:, 2] < 601]
@@ -439,24 +447,29 @@ def test7_minimal_direction_graph():
             good_lines.pop(-1)
             gausses.pop(-1)
             continue
-        if len(points) > 3:
+        if len(points) > 2:
             print("resulting lines")
             for good_line in good_lines:
                 print(np.asarray(good_line.points))
             print("resulting gausses")
             for gauss in gausses:
                 print(gauss)
-        bone_line = np.random.rand(3)-1/2
-        bone_line = line_size*bone_line/np.linalg.norm(bone_line)
+
+            with open(save_path, 'w') as f:
+                json.dump({str(np.asarray(good_lines[i].points)[1].tolist()):gausses[i] for i in range(len(good_lines))}, f)
+            break
+        # bone_line = np.random.rand(3)-1/2
+        # bone_line = line_size*bone_line/np.linalg.norm(bone_line)
+        bone_line = np.asarray(new_pcd.points)[points[0]] - np.asarray(new_pcd.points)[points[1]]
         pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
 
         gausses.append([])
         cover_num = 0
         for cluster in clusters_index:
-            if len(cluster)<5:
-                continue
-            gausses[len(good_lines)].append({"mean": np.asarray(pcd.points)[cluster].mean(axis=0),
-                                             "std": np.asarray(pcd.points)[cluster].std(axis=0)})
+            gausses[len(good_lines)].append({"mean": (np.asarray(pcd.points)[cluster].mean(axis=0)).tolist(),
+                                             "std": (np.asarray(pcd.points)[cluster].std(axis=0)).tolist(),
+                                             "color":np.random.random(3).tolist(),
+                                             "axis":bone_line.tolist()})
             cover_num+=len(cluster)
         if cover_num/len(pcd.points)>0.1:
             print("good coverage")
@@ -482,7 +495,28 @@ def pcd_to_graph():
         source, o3d.utility.DoubleVector(radii))
     o3d.visualization.draw_geometries([source, rec_mesh])
 
+def create_rfb(mean, std, axis,color=np.array([0,0,0])):
+    mesh_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
+    mesh_sphere.transform(np.array([[std[0],0,0,0],
+                                    [0,std[1],0,0],
+                                    [0,0,std[2],0],
+                                    [0,0,0,1]]))
+    unit = np.array([1,0,0])
+    a, b = (unit / np.linalg.norm(unit)).reshape(3), (axis / np.linalg.norm(axis)).reshape(3)
+    v = np.cross(a, b)
+    c = np.dot(a, b)
+    s = np.linalg.norm(v)
+    kmat = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    rotation_matrix = np.eye(3) + kmat + kmat.dot(kmat) * ((1 - c) / (s ** 2))
+    mesh_sphere.rotate(rotation_matrix,np.array([0,0,0]))
+    mesh_sphere.translate(mean)
+    mesh_sphere.paint_uniform_color(color.tolist())
 
+    # line = o3d.geometry.LineSet()
+    # line.points = o3d.utility.Vector3dVector([[0,0,0],axis])
+    # line.lines = o3d.utility.Vector2iVector([[0,1]])
+    # o3d.visualization.draw([line,mesh_sphere])
+    return mesh_sphere
 if __name__ == "__main__":
 
     # test1_get_some_bones()
@@ -492,3 +526,4 @@ if __name__ == "__main__":
     # test5_atlas()
     # test6_histograms_atlas()
     test7_minimal_direction_graph()
+    # create_rfb(np.array([1,1,0]),np.array([0.1,0.1,3]),np.array([1,1,0]))
