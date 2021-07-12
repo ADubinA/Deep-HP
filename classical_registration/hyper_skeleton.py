@@ -12,7 +12,7 @@ import glob, os
 from create_atlas import histogram_features, create_rfb
 
 class HyperSkeleton:
-    def __init__(self, normal_rad=20):
+    def __init__(self, normal_rad=20, slice_size = 300):
         self.normal_rad = normal_rad
         self.resample = 0.2
         self.stop_after_n_results =300
@@ -30,6 +30,8 @@ class HyperSkeleton:
         self.best_result = []  # list of nodes on the tree
         self.all_options=[] # list of tuple that has all the options in self.option_dict. of the form [(axis_index,option_index)]
         self.node_name_gen = NodeNameGen()
+        self.slice_size =slice_size
+        self.slice_start = None
         self.create_atlas()
 
     def nearest_scan(self, pcd_path,histogram_path = None):
@@ -51,6 +53,8 @@ class HyperSkeleton:
                     transforms.append(atlas_option["mean"]-source_option["mean"])
         transforms = np.array(transforms)
         H, edges = np.histogramdd(transforms, bins=10)
+        if H.max()<=2:
+            return []
         best_options_index = np.transpose(np.nonzero((H>H.max()/2)))
 
         # grid_transforms = [np.array([edges[i][best_option_index[i]] for i in range(3)])
@@ -291,8 +295,9 @@ class HyperSkeleton:
         pcd = o3d.io.read_point_cloud(path)
 
         numpy_source = np.asarray(pcd.points)
-        numpy_source = numpy_source[numpy_source[:, 2] > 200]
-        numpy_source = numpy_source[numpy_source[:, 2] < 601]
+        self.slice_start = np.random.random()*(numpy_source[:,2].max()-self.slice_size)
+        numpy_source = numpy_source[numpy_source[:, 2] > self.slice_start]
+        numpy_source = numpy_source[numpy_source[:, 2] < self.slice_start+self.slice_size]
 
         pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * self.resample))
         pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
@@ -512,26 +517,97 @@ def calculate_deformation(source, target):
     transform = np.array(transforms).mean(axis=0)
     return transform
 
+
+import numpy as np
+from sklearn.neighbors import NearestNeighbors
+
+
+def chamfer_distance(x, y, metric='l2', direction='bi'):
+    """Chamfer distance between two point clouds
+    https://gist.github.com/sergeyprokudin/c4bf4059230da8db8256e36524993367
+    Parameters
+    ----------
+    x: numpy array [n_points_x, n_dims]
+        first point cloud
+    y: numpy array [n_points_y, n_dims]
+        second point cloud
+    metric: string or callable, default ‘l2’
+        metric to use for distance computation. Any metric from scikit-learn or scipy.spatial.distance can be used.
+    direction: str
+        direction of Chamfer distance.
+            'y_to_x':  computes average minimal distance from every point in y to x
+            'x_to_y':  computes average minimal distance from every point in x to y
+            'bi': compute both
+    Returns
+    -------
+    chamfer_dist: float
+        computed bidirectional Chamfer distance:
+            sum_{x_i \in x}{\min_{y_j \in y}{||x_i-y_j||**2}} + sum_{y_j \in y}{\min_{x_i \in x}{||x_i-y_j||**2}}
+    """
+
+    if direction == 'y_to_x':
+        x_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(x)
+        min_y_to_x = x_nn.kneighbors(y)[0]
+        chamfer_dist = np.mean(min_y_to_x)
+    elif direction == 'x_to_y':
+        y_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(y)
+        min_x_to_y = y_nn.kneighbors(x)[0]
+        chamfer_dist = np.mean(min_x_to_y)
+    elif direction == 'bi':
+        x_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(x)
+        min_y_to_x = x_nn.kneighbors(y)[0]
+        y_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(y)
+        min_x_to_y = y_nn.kneighbors(x)[0]
+        chamfer_dist = np.mean(min_y_to_x) + np.mean(min_x_to_y)
+    else:
+        raise ValueError("Invalid direction type. Supported types: \'y_x\', \'x_y\', \'bi\'")
+
+    return chamfer_dist
+
+def generate_data(data_path, atlas_path):
+    save_path = r"D:\experiments\data_gen_skeletons\test1.json"
+    num_samples = 10000
+    times_per_sample = 5
+    log_rate=20
+    atlas = o3d.io.read_point_cloud(atlas_path)
+    log = []
+    for path in glob.glob(os.path.join(data_path,"*.ply")):
+        for i in range(times_per_sample):
+            hs = HyperSkeleton()
+            transforms = hs.nearest_scan(path, histogram_path=None)
+            best_loss = (float("infinity"),0)
+            for transform_index in range(len(transforms)):
+                source = hs.pcd.__copy__()
+                source.translate(transforms[transform_index])
+                loss = chamfer_distance(np.asarray(source.points),np.array(atlas.points),direction="x_to_y")
+                if loss < best_loss[0]:
+                    best_loss = (loss, transform_index)
+            if len(transforms) !=0:
+                log.append({"path": path, "start":hs.slice_start,"loss": best_loss[0],
+                            "transform": transforms[best_loss[1]].tolist()})
+            else:
+                log.append({"path": path, "start":hs.slice_start,"loss":float("infinity"),
+                            "transform": None})
+
+            if len(log) % log_rate == 0:
+                results = {"results": log}
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    json.dump(results, f, ensure_ascii=False, indent=4)
+
+        if len(log)>num_samples:
+            break
+    results = {"results":log}
+    with open(save_path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=4)
 if __name__ == "__main__":
-    atlas = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    hs1 = HyperSkeleton()
-    # exp_save = r"D:\experiments\reg1"
-    transforms = hs1.nearest_scan(r"D:\visceral\full_skeletons\102850_CT_Wb.ply", histogram_path = None)#r'D:\visceral\testing\102946_CT_Wb_histogram.ply')
-    for transform in transforms:
-        source = hs1.pcd.__copy__()
-        source.translate(transform)
-        o3d.visualization.draw_geometries([ source,atlas])
-    # hs1.visualize_atlas()
-    hs1.visualize_best_results()
-    # hs2 = HyperSkeleton()
-    # hs2.scan(r"D:\visceral\full_skeletons\102945_CT_Wb.ply")
-    # hs2.visualize_results()
-    #
-    # transform = calculate_deformation(hs1,hs2)
-    #
-    # hs1.transform(transform)
-    # hs1.pcd.paint_uniform_color([1,0,0])
-    # hs2.pcd.paint_uniform_color([0, 1, 0])
-    # results = hs1.visualize_best_results(save_folder=os.path.join(exp_save, "source"), return_list=True)
-    # results.extend(hs2.visualize_best_results(save_folder=os.path.join(exp_save, "target"), return_list=True))
-    # o3d.visualization.draw_geometries(results)
+    # atlas = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    # hs1 = HyperSkeleton()
+    # # exp_save = r"D:\experiments\reg1"
+    # transforms = hs1.nearest_scan(r"D:\visceral\full_skeletons\102850_CT_Wb.ply", histogram_path = None)#r'D:\visceral\testing\102946_CT_Wb_histogram.ply')
+    # for transform in transforms:
+    #     source = hs1.pcd.__copy__()
+    #     source.translate(transform)
+    #     o3d.visualization.draw_geometries([ source,atlas])
+    # # hs1.visualize_atlas()
+    # hs1.visualize_best_results()
+    generate_data(r"D:\visceral\full_skeletons",r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
