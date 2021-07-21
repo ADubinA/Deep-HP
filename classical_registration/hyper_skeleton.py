@@ -295,7 +295,7 @@ class HyperSkeleton:
         pcd = o3d.io.read_point_cloud(path)
 
         numpy_source = np.asarray(pcd.points)
-        self.slice_start = np.random.random()*(numpy_source[:,2].max()-self.slice_size)
+        self.slice_start =300# np.random.random()*(numpy_source[:,2].max()-self.slice_size)
         numpy_source = numpy_source[numpy_source[:, 2] > self.slice_start]
         numpy_source = numpy_source[numpy_source[:, 2] < self.slice_start+self.slice_size]
 
@@ -566,9 +566,9 @@ def chamfer_distance(x, y, metric='l2', direction='bi'):
 
 def generate_data(data_path, atlas_path):
     save_path = r"D:\experiments\data_gen_skeletons\test1.json"
-    num_samples = 10000
-    times_per_sample = 5
-    log_rate=20
+    num_samples = 10
+    times_per_sample = 1
+    log_rate=1
     atlas = o3d.io.read_point_cloud(atlas_path)
     log = []
     for path in glob.glob(os.path.join(data_path,"*.ply")):
@@ -596,9 +596,35 @@ def generate_data(data_path, atlas_path):
 
         if len(log)>num_samples:
             break
-    results = {"results":log}
+    results = {"results":log, "slice_size":hs.slice_size}
     with open(save_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=4)
+
+def visualize_results(json_path):
+    import matplotlib.pyplot as plt
+    with open(json_path) as f:
+       data_dict = json.load(f)
+
+    # how many where not detected
+    x_good= []
+    y_good=[]
+    x_bad = []
+    y_bad = []
+    for result in data_dict["results"]:
+        if result["transform"] == None:
+            x_bad.append(result["start"])
+            y_bad.append(0)
+        else:
+            x_good.append((result["start"]))
+            y_good.append((result["loss"]))
+
+    plt.plot(x_bad, y_bad, 'bo')
+    plt.plot(x_good, y_good, 'go')
+    plt.show()
+
+
+    # historgram of accuracy per slice range
+
 if __name__ == "__main__":
     # atlas = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
     # hs1 = HyperSkeleton()
@@ -610,4 +636,5 @@ if __name__ == "__main__":
     #     o3d.visualization.draw_geometries([ source,atlas])
     # # hs1.visualize_atlas()
     # hs1.visualize_best_results()
-    generate_data(r"D:\visceral\full_skeletons",r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    # generate_data(r"D:\visceral\full_skeletons",r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    visualize_results(r"D:\experiments\data_gen_skeletons\test1.json")
