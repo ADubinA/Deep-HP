@@ -7,6 +7,7 @@ import copy
 import open3d as o3d
 import tqdm
 import random
+from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import AgglomerativeClustering
 import glob, os
 from create_atlas import histogram_features, create_rfb
@@ -40,7 +41,7 @@ class HyperSkeleton:
         std_thresh=3
 
         # for each option calculated
-        transforms = []
+        matches = []
         for axis_index, source_options in self.option_dict.items():
             for source_option in source_options:
 
@@ -50,8 +51,8 @@ class HyperSkeleton:
                         continue
 
                     # calculate loss if we moved the source distribution to atlas distribution
-                    transforms.append(atlas_option["mean"]-source_option["mean"])
-        transforms = np.array(transforms)
+                    matches.append((atlas_option, source_option))
+        transforms = np.array([match[0]["mean"]-match[1]["mean"] for match in matches])
         H, edges = np.histogramdd(transforms, bins=10)
         if H.max()<=2:
             return []
@@ -59,14 +60,13 @@ class HyperSkeleton:
 
         # grid_transforms = [np.array([edges[i][best_option_index[i]] for i in range(3)])
         #                   for best_option_index in best_options_index]
-        transform_list = []
+        matches_list = []
         for best_option_index in best_options_index:
             start = np.array([edges[i][best_option_index[i]] for i in range(3)])
             end = np.array([edges[i][best_option_index[i]+1] for i in range(3)])
-            matched_indexes = np.where(np.logical_and(np.all(transforms >= start,axis=-1),np.all(transforms < end,axis=-1)))
-            transform_list.append(transforms[matched_indexes].mean(axis=0))
-
-        return transform_list
+            matched_indexes = np.where(np.logical_and(np.all(transforms >= start,axis=-1),np.all(transforms < end,axis=-1)))[0]
+            matches_list.append([matches[i] for i in matched_indexes.tolist()])
+        return matches_list
         # find outliers
 
     def tree_scan(self, pcd_path,histogram_path = None):
@@ -96,11 +96,13 @@ class HyperSkeleton:
     def visualize_graph(self):
         pos = hierarchy_pos(self.skeleton_graph, 0)
         nx.draw(self.skeleton_graph, pos,labels=nx.get_node_attributes(self.skeleton_graph,"text"))
+
     def transform(self, transform, is_translate=True):
         if is_translate:
             self.pcd.translate(transform)
             for node in self.best_result:
                 self.skeleton_graph.nodes[node]["pos"].translate(transform)
+
     def vis_all_results(self):
         leaf_nodes = [x for x in self.skeleton_graph.nodes() if self.skeleton_graph.out_degree(x) == 0 and
                                                                 self.skeleton_graph.nodes[x]["end_node"]]
@@ -132,6 +134,7 @@ class HyperSkeleton:
             meshes.append(self.pcd)
             o3d.visualization.draw(meshes)
             return None
+
     def visualize_best_results(self, save_folder=None, return_list=False):
 
         results = [self.pcd]
@@ -171,6 +174,7 @@ class HyperSkeleton:
                     best_loss = loss
                     best_leaf = leaf_node
             self.best_result = nx.shortest_path(self.skeleton_graph, 0, best_leaf)
+
     def _stopping_conditions(self):
         # get all leaf nodes that are not end nodes
         if len(self.best_result) < self._num_of_matches()-1:
@@ -408,6 +412,7 @@ def lineseg_dists(p, a, b, clamp=True):
     else:
         return np.linalg.norm(np.cross(b-a, a-p), axis=-1)/np.linalg.norm(b-a, axis=-1)
 
+
 class NodeNameGen:
     def __init__(self):
         self.value = 0
@@ -480,6 +485,7 @@ def hierarchy_pos(G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5)
 
     return _hierarchy_pos(G, root, width, vert_gap, vert_loc, xcenter)
 
+
 def calculate_deformation(source, target):
     """
 
@@ -516,10 +522,6 @@ def calculate_deformation(source, target):
         transforms.append(target_location - source_location)
     transform = np.array(transforms).mean(axis=0)
     return transform
-
-
-import numpy as np
-from sklearn.neighbors import NearestNeighbors
 
 
 def chamfer_distance(x, y, metric='l2', direction='bi'):
@@ -564,9 +566,10 @@ def chamfer_distance(x, y, metric='l2', direction='bi'):
 
     return chamfer_dist
 
+
 def generate_data(data_path, atlas_path):
     save_path = r"D:\experiments\data_gen_skeletons\test1.json"
-    num_samples = 10
+    num_samples = 100
     times_per_sample = 1
     log_rate=1
     atlas = o3d.io.read_point_cloud(atlas_path)
@@ -574,7 +577,8 @@ def generate_data(data_path, atlas_path):
     for path in glob.glob(os.path.join(data_path,"*.ply")):
         for i in range(times_per_sample):
             hs = HyperSkeleton()
-            transforms = hs.nearest_scan(path, histogram_path=None)
+            matches = hs.nearest_scan(path, histogram_path=None)
+            transforms = [np.array([points[0]["mean"]-points[1]["mean"] for points in match]).mean(axis=0) for match in matches]
             best_loss = (float("infinity"),0)
             for transform_index in range(len(transforms)):
                 source = hs.pcd.__copy__()
@@ -584,21 +588,23 @@ def generate_data(data_path, atlas_path):
                     best_loss = (loss, transform_index)
             if len(transforms) !=0:
                 log.append({"path": path, "start":hs.slice_start,"loss": best_loss[0],
-                            "transform": transforms[best_loss[1]].tolist()})
+                            "affine_transform": transforms[best_loss[1]],
+                            "matches":matches[best_loss[1]]})
             else:
                 log.append({"path": path, "start":hs.slice_start,"loss":float("infinity"),
-                            "transform": None})
+                            "affine_transform": None})
 
             if len(log) % log_rate == 0:
-                results = {"results": log}
+                results = {"results": log, "slice_size": hs.slice_size}
                 with open(save_path, 'w', encoding='utf-8') as f:
-                    json.dump(results, f, ensure_ascii=False, indent=4)
+                    json.dump(results, f, ensure_ascii=False, indent=4,cls=NumpyEncoder)
 
         if len(log)>num_samples:
             break
     results = {"results":log, "slice_size":hs.slice_size}
     with open(save_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+        json.dump(results, f, ensure_ascii=False, indent=4,cls=NumpyEncoder)
+
 
 def visualize_results(json_path):
     import matplotlib.pyplot as plt
@@ -625,16 +631,23 @@ def visualize_results(json_path):
 
     # historgram of accuracy per slice range
 
+
+class NumpyEncoder(json.JSONEncoder):
+    """https://stackoverflow.com/questions/26646362/numpy-array-is-not-json-serializable"""
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
 if __name__ == "__main__":
     # atlas = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
     # hs1 = HyperSkeleton()
     # # exp_save = r"D:\experiments\reg1"
-    # transforms = hs1.nearest_scan(r"D:\visceral\full_skeletons\102850_CT_Wb.ply", histogram_path = None)#r'D:\visceral\testing\102946_CT_Wb_histogram.ply')
-    # for transform in transforms:
+    # matches = hs1.nearest_scan(r"D:\visceral\full_skeletons\102850_CT_Wb.ply", histogram_path = None)#r'D:\visceral\testing\102946_CT_Wb_histogram.ply')
+    # for match in matches:
     #     source = hs1.pcd.__copy__()
-    #     source.translate(transform)
+    #     source.translate(np.array([points[0]["mean"]-points[1]["mean"] for points in match]).mean(axis=0))
     #     o3d.visualization.draw_geometries([ source,atlas])
-    # # hs1.visualize_atlas()
+    # hs1.visualize_atlas()
     # hs1.visualize_best_results()
-    # generate_data(r"D:\visceral\full_skeletons",r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    visualize_results(r"D:\experiments\data_gen_skeletons\test1.json")
+    generate_data(r"D:\visceral\full_skeletons",r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+    # visualize_results(r"D:\experiments\data_gen_skeletons\test1.json")
