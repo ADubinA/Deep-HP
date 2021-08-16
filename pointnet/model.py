@@ -123,17 +123,23 @@ class Classifier1(nn.Module):
         x = self.drop1(F.relu(self.bn1(self.fc1(x))))
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
-        x[:,self.num_class: ] = F.log_softmax(x[:self.num_class], -1)
-
-
+        x = x.view(B,-1,4)
+        x[:,:1 ] = F.log_softmax(x[:,1 ], -1)
         return x,l3_points
 
 
 class get_loss(nn.Module):
     def __init__(self):
         super(get_loss, self).__init__()
-
-    def forward(self, pred, target, trans_feat):
-        total_loss = F.nll_loss(pred, target)
-
+        self.c = 1
+    def forward(self, pred, target, trans_feat=None):
+        total_loss = F.nll_loss(pred[:,0], target[:,0])
+        total_loss += self.c * self.weighted_mse_loss(pred[:,1:], target[:,1:],pred[:,0])
         return total_loss
+
+    @staticmethod
+    def weighted_mse_loss(pred, target, weights):
+        out = (pred - target) ** 2
+        out = out * weights.expand_as(out)
+        loss = out.sum(0)  # or sum over whatever dimensions
+        return loss

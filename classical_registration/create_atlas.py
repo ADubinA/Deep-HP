@@ -427,7 +427,7 @@ def test6_histograms_atlas():
 def test7_minimal_direction_graph():
     line_size = 30
     pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    save_path = r"D:\experiments\atlases\full_altas1.json"
+    save_path = r"D:\experiments\atlases\full_altas2.json"
     numpy_source = np.asarray(pcd.points)
     # numpy_source = numpy_source[numpy_source[:, 2] > 400]
     # numpy_source = numpy_source[numpy_source[:, 2] < 601]
