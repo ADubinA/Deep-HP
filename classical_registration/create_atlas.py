@@ -1,4 +1,5 @@
 # examples/Python/Advanced/interactive_visualization.py
+import time
 
 import numpy as np
 import copy
@@ -187,7 +188,7 @@ def check_full_bone(pcd,bone_line):
 
 def get_bone_clusters(pcd, bone_line, cluster_dist = 5):
     bone_tree = o3d.geometry.KDTreeFlann(pcd)
-    pcd.paint_uniform_color((0,0,0))
+    # pcd.paint_uniform_color((0,0,0))
     choosen_points = []
     choosen_indexes = []
     for point_index in tqdm.tqdm(range(np.asarray(pcd.points).shape[0])):
@@ -427,7 +428,8 @@ def test6_histograms_atlas():
 def test7_minimal_direction_graph():
     line_size = 30
     pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    save_path = r"D:\experiments\atlases\full_altas2.json"
+    save_path = r"D:\experiments\atlases\atlas_1.json"
+    summery = "21 of aug experement, will have full body registration"
     numpy_source = np.asarray(pcd.points)
     # numpy_source = numpy_source[numpy_source[:, 2] > 400]
     # numpy_source = numpy_source[numpy_source[:, 2] < 601]
@@ -439,13 +441,16 @@ def test7_minimal_direction_graph():
     pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=normal_rad, max_nn=30))
 
     _, new_pcd = histogram_features(pcd)
+    new_pcd.paint_uniform_color((0,0,0))
     good_lines = []
     gausses = []
+    pcds=[new_pcd.__copy__()]
     while True:
-        points = pick_points(new_pcd)
+        points = pick_points(pcds[-1])
         if len(points) < 2:
             good_lines.pop(-1)
             gausses.pop(-1)
+            pcds.pop(-1)
             continue
         if len(points) > 2:
             print("resulting lines")
@@ -456,20 +461,31 @@ def test7_minimal_direction_graph():
                 print(gauss)
 
             with open(save_path, 'w') as f:
-                json.dump({str(np.asarray(good_lines[i].points)[1].tolist()):gausses[i] for i in range(len(good_lines))}, f)
+                num_lines = 0
+                for gauss in gausses:
+                    num_lines += len(gauss)
+                j = {"atlas": {str(np.asarray(good_lines[i].points)[1].tolist()):gausses[i] for i in range(len(good_lines))}}
+                j["num_lines"] = num_lines
+                j["summery"] = summery
+                json.dump(j, f)
             break
         # bone_line = np.random.rand(3)-1/2
         # bone_line = line_size*bone_line/np.linalg.norm(bone_line)
         bone_line = np.asarray(new_pcd.points)[points[0]] - np.asarray(new_pcd.points)[points[1]]
-        pcd, clusters_index = get_bone_clusters(new_pcd.__copy__(), bone_line)
-
+        pcd, clusters = get_bone_clusters(pcds[-1].__copy__(), bone_line)
+        pcds.append(pcd)
         gausses.append([])
         cover_num = 0
-        for cluster in clusters_index:
+        for cluster in clusters:
+            # calculate the cluster index
+            cluster_index = 0
+            for gauss in gausses:
+                cluster_index+= len(gauss)
             gausses[len(good_lines)].append({"mean": (np.asarray(pcd.points)[cluster].mean(axis=0)).tolist(),
                                              "std": (np.asarray(pcd.points)[cluster].std(axis=0)).tolist(),
                                              "color":np.random.random(3).tolist(),
-                                             "axis":bone_line.tolist()})
+                                             "axis":bone_line.tolist(),
+                                             "index": cluster_index })
             cover_num+=len(cluster)
         if cover_num/len(pcd.points)>0.1:
             print("good coverage")
@@ -478,7 +494,7 @@ def test7_minimal_direction_graph():
                                                      bone_line])
         lineset.lines = o3d.utility.Vector2iVector(np.array([[0, 1]]))
         good_lines.append(lineset)
-        o3d.visualization.draw_geometries([pcd] + good_lines)
+        o3d.visualization.draw_geometries([pcds[-1]] + good_lines)
 def pcd_to_graph():
     source = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
     numpy_source = np.asarray(source.points)

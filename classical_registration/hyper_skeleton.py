@@ -13,7 +13,7 @@ import glob, os
 from create_atlas import histogram_features, create_rfb
 
 class HyperSkeleton:
-    def __init__(self, normal_rad=20, slice_size = 300):
+    def __init__(self, normal_rad=20, slice_size = 1000):
         self.normal_rad = normal_rad
         self.resample = 0.2
         self.stop_after_n_results =300
@@ -21,7 +21,7 @@ class HyperSkeleton:
         self.space_loss_coef = 100
         self.atlas_axises = []
         self.atlas = {}
-        self.atlas_path = r"D:\experiments\atlases\large_atlas.json"
+        self.atlas_path = r"D:\experiments\atlases\atlas_1.json"
         self.rbfs = None
         self.skeleton_graph = nx.DiGraph()
         self.skeleton_graph.add_node(0, prob=0, pos=None, atlas_index=None, loss=0,end_node=False)
@@ -32,7 +32,7 @@ class HyperSkeleton:
         self.all_options=[] # list of tuple that has all the options in self.option_dict. of the form [(axis_index,option_index)]
         self.node_name_gen = NodeNameGen()
         self.slice_size =slice_size
-        self.slice_start = None
+        self.slice_start =0# np.random.random()*(numpy_source[:,2].max()-self.slice_size)
         self.create_atlas()
 
     def nearest_scan(self, pcd_path,histogram_path = None):
@@ -299,7 +299,6 @@ class HyperSkeleton:
         pcd = o3d.io.read_point_cloud(path)
 
         numpy_source = np.asarray(pcd.points)
-        self.slice_start =300# np.random.random()*(numpy_source[:,2].max()-self.slice_size)
         numpy_source = numpy_source[numpy_source[:, 2] > self.slice_start]
         numpy_source = numpy_source[numpy_source[:, 2] < self.slice_start+self.slice_size]
 
@@ -314,7 +313,7 @@ class HyperSkeleton:
 
     def create_atlas(self):
         with open(self.atlas_path, 'r') as f:
-            atlas_file = json.load(f)
+            atlas_file = json.load(f)["atlas"]
         self.atlas_axises = []
         self.atlas = {}
         i = 0
@@ -326,6 +325,7 @@ class HyperSkeleton:
                     "mean": np.array(rbf["mean"]),
                     "std": np.array(rbf["std"]),
                     "axis": np.array(rbf["axis"]),
+                    "index": np.array(rbf["index"]),
                     "color": np.array(rbf["color"])})
             self.atlas[i] = rbfs
             i+=1
@@ -568,7 +568,8 @@ def chamfer_distance(x, y, metric='l2', direction='bi'):
 
 
 def generate_data(data_path, atlas_path):
-    save_path = r"D:\experiments\data_gen_skeletons\test1.json"
+    save_path = r"D:\experiments\data_gen_skeletons\labels_1.json"
+    summery = "results of aug 21 atlas"
     num_samples = 100
     times_per_sample = 1
     log_rate=1
@@ -587,11 +588,11 @@ def generate_data(data_path, atlas_path):
                 if loss < best_loss[0]:
                     best_loss = (loss, transform_index)
             if len(transforms) !=0:
-                log.append({"path": path, "start":hs.slice_start,"loss": best_loss[0],
+                log.append({"path": os.path.basename(path), "start":hs.slice_start,"loss": best_loss[0],
                             "affine_transform": transforms[best_loss[1]],
                             "matches":matches[best_loss[1]]})
             else:
-                log.append({"path": path, "start":hs.slice_start,"loss":float("infinity"),
+                log.append({"path": os.path.basename(path), "start":hs.slice_start,"loss":float("infinity"),
                             "affine_transform": None})
 
             if len(log) % log_rate == 0:
@@ -601,7 +602,7 @@ def generate_data(data_path, atlas_path):
 
         if len(log)>num_samples:
             break
-    results = {"results":log, "slice_size":hs.slice_size}
+    results = {"results":log, "slice_size":hs.slice_size, "summery": summery}
     with open(save_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=4,cls=NumpyEncoder)
 
