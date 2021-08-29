@@ -17,7 +17,7 @@ import argparse
 
 from pathlib import Path
 from tqdm import tqdm
-from data_utils.ModelNetDataLoader import ModelNetDataLoader
+from dataset.dataloaders import VisceralData
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -28,8 +28,8 @@ def parse_args():
     parser = argparse.ArgumentParser('training')
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
-    parser.add_argument('--batch_size', type=int, default=24, help='batch size in training')
-    parser.add_argument('--model', default='pointnet_cls', help='model name [default: pointnet_cls]')
+    parser.add_argument('--batch_size', type=int, default=4, help='batch size in training')
+    parser.add_argument('--model', default='classifer_with_mean_location', help='model name [default: classifer_with_mean_location]')
     parser.add_argument('--num_category', default=40, type=int, choices=[10, 40],  help='training on ModelNet10/40')
     parser.add_argument('--epoch', default=200, type=int, help='number of epoch in training')
     parser.add_argument('--learning_rate', default=0.001, type=float, help='learning rate in training')
@@ -54,28 +54,32 @@ def test(model, loader, num_class=40):
     class_acc = np.zeros((num_class, 3))
     classifier = model.eval()
 
-    for j, (points, target) in tqdm(enumerate(loader), total=len(loader)):
+    for batch_id, data_dict in tqdm(enumerate(loader, 0), total=len(loader), smoothing=0.9):
+        points = data_dict["data"]
+        target = data_dict["target"]
 
         if not args.use_cpu:
             points, target = points.cuda(), target.cuda()
 
-        points = points.transpose(2, 1)
         pred, _ = classifier(points)
-        pred_choice = pred.data.max(1)[1]
+        threshold = torch.tensor([0.5])
+        if not args.use_cpu:
+            threshold = threshold.cuda()
+        pred_choice = pred[:, :, 0] > threshold
 
-        for cat in np.unique(target.cpu()):
-            classacc = pred_choice[target == cat].eq(target[target == cat].long().data).cpu().sum()
-            class_acc[cat, 0] += classacc.item() / float(points[target == cat].size()[0])
-            class_acc[cat, 1] += 1
-
-        correct = pred_choice.eq(target.long().data).cpu().sum()
+        correct = pred_choice.eq(target[:, :, 0].long().data).cpu().sum()
         mean_correct.append(correct.item() / float(points.size()[0]))
 
-    class_acc[:, 2] = class_acc[:, 0] / class_acc[:, 1]
-    class_acc = np.mean(class_acc[:, 2])
+        # for cat in np.unique(target.cpu()):
+        #     classacc = pred_choice[target == cat].eq(target[target == cat].long().data).cpu().sum()
+        #     class_acc[cat, 0] += classacc.item() / float(points[target == cat].size()[0])
+        #     class_acc[cat, 1] += 1
+    #
+    # class_acc[:, 2] = class_acc[:, 0] / class_acc[:, 1]
+    # class_acc = np.mean(class_acc[:, 2])
     instance_acc = np.mean(mean_correct)
 
-    return instance_acc, class_acc
+    return instance_acc,0# class_acc
 
 
 def main(args):
@@ -116,18 +120,26 @@ def main(args):
 
     '''DATA LOADING'''
     log_string('Load dataset ...')
-    data_path = 'data/modelnet40_normal_resampled/'
-
-    train_dataset = ModelNetDataLoader(root=data_path, args=args, split='train', process_data=args.process_data)
-    test_dataset = ModelNetDataLoader(root=data_path, args=args, split='test', process_data=args.process_data)
+    data_path = r'D:\visceral\full_skeletons'
+    labels_path = r"D:\experiments\data_gen_skeletons\labels_1.json"
+    atlas_path = r"D:\experiments\atlases\atlas_1.json"
+    full_dataset = VisceralData(data_path,
+		labels_path,
+		atlas_path,
+		ref_num_points=1024,
+		intensity_range=(500, 5000),
+		ref_path=None)
+    train_size = int(0.8 * len(full_dataset))
+    test_size = len(full_dataset) - train_size
+    train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size])
     trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
     testDataLoader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
     '''MODEL LOADING'''
-    num_class = args.num_category
+    num_class = full_dataset.num_classes
     model = importlib.import_module(args.model)
     shutil.copy('./models/%s.py' % args.model, str(exp_dir))
-    shutil.copy('models/pointnet2_utils.py', str(exp_dir))
+    shutil.copy('models/base/pointnet2_utils.py', str(exp_dir))
     shutil.copy('./train_classification.py', str(exp_dir))
 
     classifier = model.get_model(num_class, normal_channel=args.use_normals)
@@ -172,24 +184,28 @@ def main(args):
         classifier = classifier.train()
 
         scheduler.step()
-        for batch_id, (points, target) in tqdm(enumerate(trainDataLoader, 0), total=len(trainDataLoader), smoothing=0.9):
+        for batch_id, data_dict in tqdm(enumerate(trainDataLoader, 0), total=len(trainDataLoader), smoothing=0.9):
             optimizer.zero_grad()
-
-            points = points.data.numpy()
-            points = provider.random_point_dropout(points)
-            points[:, :, 0:3] = provider.random_scale_point_cloud(points[:, :, 0:3])
-            points[:, :, 0:3] = provider.shift_point_cloud(points[:, :, 0:3])
-            points = torch.Tensor(points)
-            points = points.transpose(2, 1)
+            points = data_dict["data"]
+            target = data_dict["target"]
+            # points = points.data.numpy()
+            # points = provider.random_point_dropout(points)
+            # points[:, :, 0:3] = provider.random_scale_point_cloud(points[:, :, 0:3])
+            # points[:, :, 0:3] = provider.shift_point_cloud(points[:, :, 0:3])
+            # points = torch.Tensor(points)
+            # points = points.transpose(2, 1)
 
             if not args.use_cpu:
                 points, target = points.cuda(), target.cuda()
 
             pred, trans_feat = classifier(points)
             loss = criterion(pred, target.long(), trans_feat)
-            pred_choice = pred.data.max(1)[1]
+            threshold = torch.tensor([0.5])
+            if not args.use_cpu:
+                threshold = threshold.cuda()
+            pred_choice = pred[:,:,0]>threshold
 
-            correct = pred_choice.eq(target.long().data).cpu().sum()
+            correct = pred_choice.eq(target[:,:,0].long().data).cpu().sum()
             mean_correct.append(correct.item() / float(points.size()[0]))
             loss.backward()
             optimizer.step()

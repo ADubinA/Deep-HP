@@ -80,9 +80,7 @@ from __future__ import print_function
 #         optimizer = optim.Adam(self.model.parameters(), lr=self.lr, betas=self.betas)
 #         # scheduler = optim.lr_scheduler.LambdaLR(optimizer)
 #         return optimizer#, scheduler
-
-
-
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pointnet.models.base.pointnet2_utils import PointNetSetAbstractionMsg, PointNetSetAbstraction
@@ -124,22 +122,24 @@ class get_model(nn.Module):
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
         x = x.view(B,-1,4)
-        x[:,:1 ] = F.log_softmax(x[:,1 ], -1)
+        x[:,:,0 ] = F.sigmoid(x[:,:,0 ])
         return x,l3_points
 
 
 class get_loss(nn.Module):
     def __init__(self):
         super(get_loss, self).__init__()
-        self.c = 1
+        self.c = 0
     def forward(self, pred, target, trans_feat=None):
-        total_loss = F.nll_loss(pred[:,0], target[:,0])
-        total_loss += self.c * self.weighted_mse_loss(pred[:,1:], target[:,1:],pred[:,0])
+        target = target.type(torch.float32)
+        total_loss = F.binary_cross_entropy(pred[:,:,0], target[:,:,0])
+        weights = pred[:,:,0].unsqueeze(-1)
+        total_loss += self.c * self.weighted_mse_loss(pred[:,:,1:], target[:,:,1:],weights)
         return total_loss
 
     @staticmethod
     def weighted_mse_loss(pred, target, weights):
         out = (pred - target) ** 2
         out = out * weights.expand_as(out)
-        loss = out.sum(0)  # or sum over whatever dimensions
+        loss = out.sum()  # or sum over whatever dimensions
         return loss
