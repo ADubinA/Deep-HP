@@ -1,6 +1,7 @@
 # examples/Python/Advanced/interactive_visualization.py
 import time
 
+import networkx
 import numpy as np
 import copy
 import open3d as o3d
@@ -90,7 +91,7 @@ def to_spherical(points, normalize_angles=True):
     points_spherical[:,2] = np.arctan2(points[:,1], points[:,0])
 
     if normalize_angles:
-        points_spherical[:, 0] = points_spherical[:,0]/points_spherical[:,0].max()
+        points_spherical[:, 0] = points_spherical[:,0]
         points_spherical[:, 1] = (points_spherical[:,1])/(np.pi)
         points_spherical[:, 2] = (points_spherical[:, 2] + np.pi) / (2 * np.pi)
     return points_spherical
@@ -427,14 +428,14 @@ def test6_histograms_atlas():
         o3d.visualization.draw_geometries([pcd]+good_lines)
 def test7_minimal_direction_graph():
     line_size = 30
-    pcd = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    save_path = r"D:\experiments\atlases\atlas_1.json"
-    summery = "21 of aug experement, will have full body registration"
+    pcd = o3d.io.read_point_cloud(r"D:\datasets\nmdid\pcd\127310_BONE_TORSO_3_X_3.ply")
+    save_path = r"D:\datasets\nmdid\experiments\atlases\atlas_1.json"
+    summery = "22-nov-first try with nmdid"
     numpy_source = np.asarray(pcd.points)
     # numpy_source = numpy_source[numpy_source[:, 2] > 400]
     # numpy_source = numpy_source[numpy_source[:, 2] < 601]
-    resample = 0.2
-    normal_rad = 20
+    resample = 1
+    normal_rad = 10
     pcd_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
     pcd.points = o3d.utility.Vector3dVector(numpy_source[pcd_index])
     pcd.paint_uniform_color([0.1, 0.1, 0.1])
@@ -495,21 +496,6 @@ def test7_minimal_direction_graph():
         lineset.lines = o3d.utility.Vector2iVector(np.array([[0, 1]]))
         good_lines.append(lineset)
         o3d.visualization.draw_geometries([pcds[-1]] + good_lines)
-def pcd_to_graph():
-    source = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    numpy_source = np.asarray(source.points)
-    numpy_source = numpy_source[numpy_source[:, 2] > 300]
-    numpy_source = numpy_source[numpy_source[:, 2] < 801]
-    resample = 0.75
-    source_index = np.random.randint(0, numpy_source.shape[0], int(numpy_source.shape[0] * resample))
-    source.points = o3d.utility.Vector3dVector(numpy_source[source_index])
-    source.paint_uniform_color([0.1, 0.1, 0.1])
-    source.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=10, max_nn=30))
-
-    radii = [2, 4, 8, 15]
-    rec_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-        source, o3d.utility.DoubleVector(radii))
-    o3d.visualization.draw_geometries([source, rec_mesh])
 
 def create_rfb(mean, std, axis,color=np.array([0,0,0])):
     mesh_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
@@ -533,6 +519,11 @@ def create_rfb(mean, std, axis,color=np.array([0,0,0])):
     # line.lines = o3d.utility.Vector2iVector([[0,1]])
     # o3d.visualization.draw([line,mesh_sphere])
     return mesh_sphere
+
+
+
+
+
 if __name__ == "__main__":
 
     # test1_get_some_bones()

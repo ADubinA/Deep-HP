@@ -1,4 +1,6 @@
 import json
+import time
+from datetime import datetime
 
 import networkx as nx
 from networkx.algorithms.dag import dag_longest_path
@@ -13,15 +15,15 @@ import glob, os
 from create_atlas import histogram_features, create_rfb
 
 class HyperSkeleton:
-    def __init__(self, normal_rad=20, slice_size = 1000):
+    def __init__(self, normal_rad=10, slice_size = 100):
         self.normal_rad = normal_rad
-        self.resample = 0.2
+        self.resample = 1
         self.stop_after_n_results =300
         self.max_iter = 10000
         self.space_loss_coef = 100
         self.atlas_axises = []
         self.atlas = {}
-        self.atlas_path = r"D:\experiments\atlases\atlas_1.json"
+        self.atlas_path = r"D:\datasets\nmdid\experiments\atlases\atlas_1.json"
         self.rbfs = None
         self.skeleton_graph = nx.DiGraph()
         self.skeleton_graph.add_node(0, prob=0, pos=None, atlas_index=None, loss=0,end_node=False)
@@ -32,7 +34,7 @@ class HyperSkeleton:
         self.all_options=[] # list of tuple that has all the options in self.option_dict. of the form [(axis_index,option_index)]
         self.node_name_gen = NodeNameGen()
         self.slice_size =slice_size
-        self.slice_start =0# np.random.random()*(numpy_source[:,2].max()-self.slice_size)
+        self.slice_start =100# np.random.random()*(numpy_source[:,2].max()-self.slice_size)
         self.create_atlas()
 
     def nearest_scan(self, pcd_path,histogram_path = None):
@@ -299,6 +301,8 @@ class HyperSkeleton:
         pcd = o3d.io.read_point_cloud(path)
 
         numpy_source = np.asarray(pcd.points)
+        self.slice_start = np.random.random()*(numpy_source[:,2].max()-self.slice_size)
+
         numpy_source = numpy_source[numpy_source[:, 2] > self.slice_start]
         numpy_source = numpy_source[numpy_source[:, 2] < self.slice_start+self.slice_size]
 
@@ -568,10 +572,10 @@ def chamfer_distance(x, y, metric='l2', direction='bi'):
 
 
 def generate_data(data_path, atlas_path):
-    save_path = r"D:\experiments\data_gen_skeletons\labels_1.json"
+    save_path = r"D:\datasets\nmdid\experiments\results\labels_1.json"
     summery = "results of aug 21 atlas"
     num_samples = 100
-    times_per_sample = 1
+    times_per_sample = 10
     log_rate=1
     atlas = o3d.io.read_point_cloud(atlas_path)
     log = []
@@ -607,7 +611,7 @@ def generate_data(data_path, atlas_path):
         json.dump(results, f, ensure_ascii=False, indent=4,cls=NumpyEncoder)
 
 
-def visualize_results(json_path):
+def visualize_results(json_path, save_path=None, ply_path=None):
     import matplotlib.pyplot as plt
     with open(json_path) as f:
        data_dict = json.load(f)
@@ -618,20 +622,38 @@ def visualize_results(json_path):
     x_bad = []
     y_bad = []
     for result in data_dict["results"]:
-        if result["transform"] == None:
+        if result["affine_transform"] == None:
             x_bad.append(result["start"])
             y_bad.append(0)
         else:
             x_good.append((result["start"]))
             y_good.append((result["loss"]))
-
-    plt.plot(x_bad, y_bad, 'bo')
-    plt.plot(x_good, y_good, 'go')
+            _visualiza_result(save_path=save_path,result=result,folder_path=ply_path)
+    fig, axs = plt.subplots(1, 2, sharey=True, tight_layout=True)
+    axs[0].hist(y_bad, bins=20)
+    axs[1].hist(y_good, bins=20)
+    # plt.plot(x_bad, y_bad, 'bo')
+    # plt.plot(x_good, y_good, 'go')
     plt.show()
 
 
     # historgram of accuracy per slice range
 
+def _visualiza_result(folder_path, result, save_path=None):
+    now = datetime.now().strftime("%m-%d-%Y-%H-%M-%S")
+    source = o3d.io.read_point_cloud(os.path.join(folder_path, result["path"]))
+
+    slice_start = result["start"]
+    slice_size = 100
+    numpy_source = np.asarray(source.points)
+
+    numpy_source = numpy_source[numpy_source[:, 2] > slice_start]
+    numpy_source = numpy_source[numpy_source[:, 2] < slice_start + slice_size]
+    source.points = o3d.utility.Vector3dVector(numpy_source)
+
+    source.translate(result["affine_transform"])
+    if save_path:
+        o3d.io.write_point_cloud(os.path.join(save_path, now + result["path"]), source)
 
 class NumpyEncoder(json.JSONEncoder):
     """https://stackoverflow.com/questions/26646362/numpy-array-is-not-json-serializable"""
@@ -639,16 +661,19 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
+
+
 if __name__ == "__main__":
-    # atlas = o3d.io.read_point_cloud(r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
+
+    # atlas = o3d.io.read_point_cloud(r"D:\datasets\nmdid\pcd\127310_BONE_TORSO_3_X_3.ply")
     # hs1 = HyperSkeleton()
     # # exp_save = r"D:\experiments\reg1"
-    # matches = hs1.nearest_scan(r"D:\visceral\full_skeletons\102850_CT_Wb.ply", histogram_path = None)#r'D:\visceral\testing\102946_CT_Wb_histogram.ply')
+    # matches = hs1.nearest_scan(r"D:\datasets\nmdid\pcd\106232_BONE_TORSO_3_X_3.ply", histogram_path = None)#r'D:\visceral\testing\102946_CT_Wb_histogram.ply')
     # for match in matches:
     #     source = hs1.pcd.__copy__()
     #     source.translate(np.array([points[0]["mean"]-points[1]["mean"] for points in match]).mean(axis=0))
     #     o3d.visualization.draw_geometries([ source,atlas])
     # hs1.visualize_atlas()
     # hs1.visualize_best_results()
-    generate_data(r"D:\visceral\full_skeletons",r"D:\visceral\full_skeletons\102946_CT_Wb.ply")
-    # visualize_results(r"D:\experiments\data_gen_skeletons\test1.json")
+    # generate_data(r"D:\datasets\nmdid\pcd\torso",r"D:\datasets\nmdid\pcd\torso\127310_BONE_TORSO_3_X_3.ply")
+    visualize_results(r"D:\datasets\nmdid\experiments\results\labels_1.json",r"D:\datasets\nmdid\experiments\results",r"D:\datasets\nmdid\pcd\torso")
