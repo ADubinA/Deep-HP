@@ -51,9 +51,9 @@ class HyperSkeleton:
     def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None):
         self.graph_point_distance = 4
         self.min_path_lengths = 5
-        self.max_path_lengths = 10
+        self.max_path_lengths = 20
         self.num_bins = 8
-        self.n_clusters = 64
+        self.n_clusters = 128
         self.minimum_cluster_std_mean = 2
         self.min_z, self.max_z = min_z, max_z
         self.path = path
@@ -68,7 +68,9 @@ class HyperSkeleton:
         self.minimum_std_distance = 100
         self.minimum_feature_distance = 12
         self.min_correspondence_percent = 0.05
+        self.finish_fit_percent = 0.2
         self.num_samples = 20
+
 
         self.load_pcd()
 
@@ -94,6 +96,7 @@ class HyperSkeleton:
             points = np.stack([g.nodes[node]["point"] for node in connected])
             if points.std(axis=0).mean() < self.minimum_cluster_std_mean:
                 continue
+
             # if self.features.get(cluster_label,None) is None:
             #     self.features[cluster_label] = []
 
@@ -155,12 +158,12 @@ class HyperSkeleton:
 
         # histogram mapping colors
         if self.cluster_colors is None:
-            self.cluster_colors = np.random.random((results.shape[0],3))
+            self.cluster_colors = np.random.random((self.n_clusters,3))
         np.asarray(self.down_pcd.colors)[np.array(list(g.nodes))] = self.cluster_colors[results]
 
         for node in g.nodes:
             g.nodes[node]['label'] = results[node]
-            g.nodes[node]['color'] = self.cluster_colors[node]
+            g.nodes[node]['color'] = self.cluster_colors[results[node]]
         different_cluster_edges = [edge for edge in g.edges if g.nodes[edge[0]]["label"] != g.nodes[edge[1]]["label"]]
         g.remove_edges_from(different_cluster_edges)
 
@@ -176,7 +179,7 @@ class HyperSkeleton:
         X = X.transpose()
         return np.matmul(np.linalg.pinv(X).transpose(),Y).transpose()
 
-    def register(self, target, iterations=100):
+    def register(self, target, iterations=150):
         # for each label, find all consensuses
         best_fit = []
         best_error = float("infinity")
@@ -185,11 +188,17 @@ class HyperSkeleton:
             pbar.set_description(f"Best loss: {best_error:.2f} with fit: {len(best_fit)/len(self.features)}.")
             fit, error = self._registration_iteration(target)
             if len(fit)/len(self.features) < self.min_correspondence_percent:
+                if len(fit)> len(best_fit):
+                    best_fit = fit
                 continue
             if best_error > error:
                 best_fit,best_error = fit, error
 
-        if len(best_fit) == 0:
+            if len(best_fit)/len(self.features) > self.finish_fit_percent:
+                pbar.set_description(f"Best loss: {best_error:.2f} with fit: {len(best_fit) / len(self.features)}.")
+                break
+
+        if best_error == float("infinity"):
             return -1,-1
 
 
@@ -302,7 +311,7 @@ class HyperSkeleton:
             lineset.paint_uniform_color(np.random.random(3))
             correspondence_linesets.append(lineset)
 
-        correspondence_linesets.extend([moved,target.down_pcd, self.down_pcd])
+        correspondence_linesets.extend([moved,target.down_pcd, target.features.pcd, self.down_pcd, self.features.pcd])
         o3d.visualization.draw(correspondence_linesets)
 
     # def _sample_matches(self, target, samples):
@@ -372,24 +381,23 @@ class NumpyEncoder(json.JSONEncoder):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
 
-def test_HyperSkeleton(target_path,source_folder_path,save_path):
+def test_HyperSkeleton(target_path,source_folder_path,save_path, description=""):
     target = HyperSkeleton(target_path, min_z=0, max_z=1000)
     target.create_global_features()
 
     subvolume_size = 50
     losses = []
     for file_path in glob.glob(os.path.join(source_folder_path,"*.ply")):
-        if len(losses)%5 ==0:
-            print(len(losses))
+        print(file_path)
         for slicer_index in [0,50,100,150,200]:
-            try:
-                source = HyperSkeleton(file_path,
-                                       min_z=slicer_index, max_z=slicer_index+subvolume_size,
-                                       cluster_func=target.cluster_func, cluster_colors=target.cluster_colors)
-                source.create_global_features()
-                transform, loss = source.register(target)
-            except:
-                transform,loss = -1, -1
+
+            source = HyperSkeleton(file_path,
+                                   min_z=slicer_index, max_z=slicer_index+subvolume_size,
+                                   cluster_func=target.cluster_func, cluster_colors=target.cluster_colors)
+            source.create_global_features()
+            # o3d.visualization.draw([target.down_pcd,target.features.pcd,source.down_pcd,source.features.pcd])
+            transform, loss = source.register(target)
+
 
             losses.append(({"file_name": os.path.basename(file_path),
                             "slice_start": slicer_index,
@@ -397,13 +405,25 @@ def test_HyperSkeleton(target_path,source_folder_path,save_path):
                             "loss": loss,
                             "transform":transform}))
 
+            result_dict = {"results":losses, "description":description,
+                           "minimum_cluster_std_mean": source.minimum_cluster_std_mean,
+                           "minimum_std_distances": source.minimum_std_distance,
+                           "minimum_std_distance":source.min_correspondence_percent,
+                           "n_clusters":source.n_clusters,
+                           "num_bins":source.num_bins,
+                           "finish_fit_percent":source.finish_fit_percent,
+                           "graph_point_distance":source.graph_point_distance,
+                           "max_path_lengths":source.max_path_lengths,
+                           "minimum_feature_distance":source.minimum_feature_distance
+                           }
             with open(save_path,"w") as f:
-                json.dump(losses, f, cls=NumpyEncoder)
+                json.dump(result_dict, f, cls=NumpyEncoder)
 
 def test_view_results(json_path):
     with open(json_path, "r") as f:
         results = json.load(f)
-
+    print(f"Description: \n{results['description']}")
+    results = results["results"]
     not_outliars = np.array([result["loss"] for result in results if result["loss"] > 0 and result["loss"] < 100])
     print(f"mean results: {not_outliars.mean()} with std of {not_outliars.std()}")
     print(f"Non detection rate is {len([result for result in results if result['loss']>100 or result['loss']<0])/len(results)}")
@@ -437,10 +457,11 @@ if __name__ == "__main__":
     #                        cluster_colors=target.cluster_colors)
     # source.create_global_features()
     # source.register(target)
-
-    st = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    test_HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
-                       r"D:\datasets\nmdid\clean-body-pcd",
-                       fr"D:\research_results\HyperSkeleton\{st}_results.json")
-    # results = r"D:\research_results\HyperSkeleton\2022-01-04_18-25-21_results.json"
-    # test_view_results(results)
+    #
+    # st = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    # test_HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
+    #                    r"D:\datasets\nmdid\clean-body-pcd",
+    #                    fr"D:\research_results\HyperSkeleton\{st}_results.json",
+    #                    description= "test with full correspondence, now with 16 labels")
+    results = r"D:\research_results\HyperSkeleton\2022-01-10_01-07-44_results.json"
+    test_view_results(results)
