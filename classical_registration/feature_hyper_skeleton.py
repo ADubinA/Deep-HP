@@ -12,7 +12,8 @@ import open3d as o3d
 from tqdm import tqdm
 from create_atlas import to_spherical
 from sklearn.cluster import KMeans
-from sklearn.neighbors import NearestNeighbors
+
+from utils import chamfer_distance, calculate_curvature,NumpyEncoder, better_graph_contraction
 
 class FeaturedPointCloud:
     def __init__(self):
@@ -108,7 +109,7 @@ class HyperSkeleton:
     def _create_graph(self, pcd):
         g = nx.Graph()
         for point_index in range(np.asarray(pcd.points).shape[0]):
-            g.add_node(point_index, point=np.asarray(pcd.points)[point_index])
+            g.add_node(point_index, point=np.asarray(pcd.points)[point_index], index=point_index)
 
         bone_tree = o3d.geometry.KDTreeFlann(pcd)
         for point_index in range(np.asarray(pcd.points).shape[0]):
@@ -314,72 +315,51 @@ class HyperSkeleton:
         correspondence_linesets.extend([moved,target.down_pcd, target.features.pcd, self.down_pcd, self.features.pcd])
         o3d.visualization.draw(correspondence_linesets)
 
-    # def _sample_matches(self, target, samples):
-    #     # choose from source a sample that is not in samples randomly
-    #     # source_options = [i for i in self.features if np.isin(i, [sample[0] for sample in samples], invert=True)]
-    #     random_source_option = random.choice(self.features)
-    #
-    #     # try to find a sample in target that is not  in samples that matches
-    #     target_options = []
-    #     for target_feature in target.features:
-    #         # if np.isin(target_feature, [sample[1] for sample in samples]):  # was not picked already
-    #         #     continue
-    #         if target_feature["label"] != random_source_option["label"]:  # needs to have same label
-    #             continue
-    #         if np.linalg.norm(random_source_option["std"] - target_feature["std"]) > self.minimum_std_distance:  # is close
-    #             continue
-    #         target_options.append(target_feature)
-    #     random_target_option = random.choice(target_options)
-    #
-    #     return random_source_option, random_target_option
+    def visualize_graph(self, g):
+        linespace = o3d.geometry.LineSet()
 
-def chamfer_distance(x, y, metric='l2', direction='bi'):
-    """Chamfer distance between two point clouds
-    https://gist.github.com/sergeyprokudin/c4bf4059230da8db8256e36524993367
-    Parameters
-    ----------
-    x: numpy array [n_points_x, n_dims]
-        first point cloud
-    y: numpy array [n_points_y, n_dims]
-        second point cloud
-    metric: string or callable, default ‘l2’
-        metric to use for distance computation. Any metric from scikit-learn or scipy.spatial.distance can be used.
-    direction: str
-        direction of Chamfer distance.
-            'y_to_x':  computes average minimal distance from every point in y to x
-            'x_to_y':  computes average minimal distance from every point in x to y
-            'bi': compute both
-    Returns
-    -------
-    chamfer_dist: float
-        computed bidirectional Chamfer distance:
-            sum_{x_i \in x}{\min_{y_j \in y}{||x_i-y_j||**2}} + sum_{y_j \in y}{\min_{x_i \in x}{||x_i-y_j||**2}}
-    """
+        point_indexed = {node: i  for i, node in enumerate(g.nodes)}
+        linespace.points = o3d.utility.Vector3dVector([g.nodes[i]["point"] for i in g.nodes])
+        linespace.lines = o3d.utility.Vector2iVector([(point_indexed[edge[0]],point_indexed[edge[1]]) for edge in g.edges])
+        o3d.visualization.draw([linespace])
 
-    if direction == 'y_to_x':
-        x_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(x)
-        min_y_to_x = x_nn.kneighbors(y)[0]
-        chamfer_dist = np.mean(min_y_to_x)
-    elif direction == 'x_to_y':
-        y_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(y)
-        min_x_to_y = y_nn.kneighbors(x)[0]
-        chamfer_dist = np.mean(min_x_to_y)
-    elif direction == 'bi':
-        x_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(x)
-        min_y_to_x = x_nn.kneighbors(y)[0]
-        y_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(y)
-        min_x_to_y = y_nn.kneighbors(x)[0]
-        chamfer_dist = np.mean(min_y_to_x) + np.mean(min_x_to_y)
-    else:
-        raise ValueError("Invalid direction type. Supported types: \'y_x\', \'x_y\', \'bi\'")
 
-    return chamfer_dist
 
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return json.JSONEncoder.default(self, obj)
+
+class HyperSkeletonCurve(HyperSkeleton):
+    def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None):
+
+        super().__init__(path, min_z=min_z, max_z=max_z, cluster_func=None,cluster_colors=None)
+
+        self.num_of_paths = 20  # number of paths per points to sample curvature
+        self.histogram_range = (0,50)
+
+    def _create_local_features(self, pcd):
+
+        g = self._create_graph(pcd)
+        G = better_graph_contraction(g, int(g.number_of_nodes() / 4), 15)
+        dix = nx.all_pairs_shortest_path(g, self.max_path_lengths)
+        # dix = networkx.all_pairs_dijkstra(g, max_path_lengths)
+        bins_list = []
+        for point_index, paths in tqdm(dix, total=g.number_of_nodes(), desc="Creating local features"):
+            # paths = paths[1]  # get only the paths, not the lens
+            paths = [path for _, path in paths.items() if len(path) == self.max_path_lengths]
+            if len(paths) < self.num_of_paths:
+                bins = np.zeros(self.num_bins)
+            else:
+                chosen_paths = random.sample(paths, self.num_of_paths)
+                rads = []
+                for path in chosen_paths:
+                    path_points = np.array([g.nodes[i]["point"] for i in path])
+                    rads.append(calculate_curvature(path_points))
+
+                bins, _ = np.histogram(rads,self.num_bins, density=True, range=self.histogram_range)
+            g.nodes[point_index]["histogram"] = bins
+            bins_list.append(bins)
+
+        bins_list = np.stack(bins_list)
+        return g, bins_list
+
 
 def test_HyperSkeleton(target_path,source_folder_path,save_path, description=""):
     target = HyperSkeleton(target_path, min_z=0, max_z=1000)
@@ -444,9 +424,10 @@ def test_view_results(json_path):
 
 
 if __name__ == "__main__":
-    # target = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply", min_z=0, max_z=1000)
-    # target.down_pcd.translate(np.array([500,0,0]))
-    # target.create_global_features()
+    target = HyperSkeletonCurve(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply", min_z=0, max_z=1000)
+    target.down_pcd.translate(np.array([500,0,0]))
+    target.create_global_features()
+    o3d.visualization.draw([target.down_pcd])
     #
     # source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-121936_BONE_TORSO_3_X_3.ply",
     #                        min_z=50, max_z=150, cluster_func=target.cluster_func,
@@ -463,5 +444,5 @@ if __name__ == "__main__":
     #                    r"D:\datasets\nmdid\clean-body-pcd",
     #                    fr"D:\research_results\HyperSkeleton\{st}_results.json",
     #                    description= "test with full correspondence, now with 16 labels")
-    results = r"D:\research_results\HyperSkeleton\2022-01-10_01-07-44_results.json"
-    test_view_results(results)
+    # results = r"D:\research_results\HyperSkeleton\2022-01-10_01-07-44_results.json"
+    # test_view_results(results)

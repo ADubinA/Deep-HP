@@ -1,25 +1,13 @@
 import networkx
 import numpy as np
-import tqdm
+from tqdm import tqdm
 from sklearn.cluster import KMeans
 from mayavi import mlab
 from create_atlas import *
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 
-def graph_contraction(source_graph, contraction_percent):
-    g = source_graph.copy()
-    max_nodes = int(len(source_graph.nodes) * (1 - contraction_percent))
-    pbar = tqdm.tqdm(total=100)
-    while g.number_of_nodes() > max_nodes:
-        random_node = random.choice(list(g.nodes))
-        neighbors = list(networkx.neighbors(g, random_node))
-        for neighbor in neighbors:
-            networkx.contracted_nodes(g,random_node,neighbor,self_loops=False,copy=False)
-            pbar.set_description(f"num of nodes {g.number_of_nodes()}, trying to reduce to {max_nodes}")
-    pbar.close()
 
-    return g
 
 
 def network_plot_3D(G, angle):
