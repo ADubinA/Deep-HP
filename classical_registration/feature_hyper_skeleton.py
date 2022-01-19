@@ -81,7 +81,7 @@ class HyperSkeleton:
         numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] > self.min_z]
         numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] < self.max_z]
         self.base_pcd.points = o3d.utility.Vector3dVector(numpy_base_pcd)
-        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(self.graph_point_distance,
+        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(2,   # self.graph_point_distance,
                                                                       min_bound=np.array([0, 0, self.min_z]),
                                                                       max_bound=np.array([1000, 1000, self.max_z]))
         self.down_pcd.paint_uniform_color([0.1, 0.1, 0.1])
@@ -321,6 +321,9 @@ class HyperSkeleton:
         point_indexed = {node: i  for i, node in enumerate(g.nodes)}
         linespace.points = o3d.utility.Vector3dVector([g.nodes[i]["point"] for i in g.nodes])
         linespace.lines = o3d.utility.Vector2iVector([(point_indexed[edge[0]],point_indexed[edge[1]]) for edge in g.edges])
+
+        if g.nodes[point_indexed[0]].get("color",False):
+            linespace.colors = o3d.utility.Vector3dVector([g.nodes[point_indexed[i]]["point"] for i in g.nodes])
         o3d.visualization.draw([linespace])
 
 
@@ -337,7 +340,7 @@ class HyperSkeletonCurve(HyperSkeleton):
     def _create_local_features(self, pcd):
 
         g = self._create_graph(pcd)
-        G = better_graph_contraction(g, int(g.number_of_nodes() / 4), 15)
+        g = better_graph_contraction(g, int(g.number_of_nodes() / 40), 30)
         dix = nx.all_pairs_shortest_path(g, self.max_path_lengths)
         # dix = networkx.all_pairs_dijkstra(g, max_path_lengths)
         bins_list = []

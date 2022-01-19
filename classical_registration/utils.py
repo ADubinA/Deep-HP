@@ -172,10 +172,16 @@ def better_graph_contraction(source_graph, sample_num, max_distance):
 
     for pair, option_list in tqdm(pair_dict.items()):
         try:
-            length = nx.single_source_dijkstra_path_length(source_graph,pair, cutoff=max_distance)
+            length = nx.single_source_shortest_path_length(source_graph,pair, cutoff=max_distance) #nx.single_source_dijkstra_path_length(source_graph,pair, cutoff=max_distance)
             for option in option_list:
                 if length.get(option, 2*max_distance) < max_distance:
                     new_graph.add_edge(pair,option, weight=length)
+
+                    if not new_graph.nodes[pair].get("contraction", False):
+                        new_graph.nodes[pair]["contraction"] = [source_graph.nodes[option]]
+                    else:
+                        new_graph.nodes[pair]["contraction"].append(source_graph.nodes[option])
+
         except nx.NetworkXNoPath:
             continue
 
