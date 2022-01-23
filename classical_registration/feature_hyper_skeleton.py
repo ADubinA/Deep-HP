@@ -51,15 +51,20 @@ class FeaturedPointCloud:
 class HyperSkeleton:
     def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None):
         self.graph_point_distance = 4
+        self.min_z, self.max_z = min_z, max_z
         self.min_path_lengths = 5
         self.max_path_lengths = 20
+
+        # clustering
         self.num_bins = 8
-        self.n_clusters = 128
+        self.n_clusters = 32
         self.minimum_cluster_std_mean = 2
-        self.min_z, self.max_z = min_z, max_z
         self.path = path
         self.cluster_func = cluster_func
-        self.cluster_colors = cluster_colors
+        if cluster_colors is None:
+            self.cluster_colors = np.random.random((self.n_clusters,3))
+        else:
+            self.cluster_colors = cluster_colors
 
         self.base_pcd = None
         self.down_pcd = None
@@ -81,7 +86,7 @@ class HyperSkeleton:
         numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] > self.min_z]
         numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] < self.max_z]
         self.base_pcd.points = o3d.utility.Vector3dVector(numpy_base_pcd)
-        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(2,   # self.graph_point_distance,
+        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(self.graph_point_distance,
                                                                       min_bound=np.array([0, 0, self.min_z]),
                                                                       max_bound=np.array([1000, 1000, self.max_z]))
         self.down_pcd.paint_uniform_color([0.1, 0.1, 0.1])
@@ -158,8 +163,6 @@ class HyperSkeleton:
             results = self.cluster_func.predict(flat_bins)
 
         # histogram mapping colors
-        if self.cluster_colors is None:
-            self.cluster_colors = np.random.random((self.n_clusters,3))
         np.asarray(self.down_pcd.colors)[np.array(list(g.nodes))] = self.cluster_colors[results]
 
         for node in g.nodes:
@@ -203,7 +206,7 @@ class HyperSkeleton:
             return -1,-1
 
 
-        # self.visualize_results(best_fit,target)
+        self.visualize_results(best_fit,target)
         return self.get_affine_transform(best_fit), best_error
 
     def _registration_iteration(self,target):
@@ -322,8 +325,7 @@ class HyperSkeleton:
         linespace.points = o3d.utility.Vector3dVector([g.nodes[i]["point"] for i in g.nodes])
         linespace.lines = o3d.utility.Vector2iVector([(point_indexed[edge[0]],point_indexed[edge[1]]) for edge in g.edges])
 
-        if g.nodes[point_indexed[0]].get("color",False):
-            linespace.colors = o3d.utility.Vector3dVector([g.nodes[point_indexed[i]]["point"] for i in g.nodes])
+        linespace.colors = o3d.utility.Vector3dVector([g.nodes[i].get("color",[0,0,0]) for i in g.nodes])
         o3d.visualization.draw([linespace])
 
 
@@ -335,12 +337,14 @@ class HyperSkeletonCurve(HyperSkeleton):
         super().__init__(path, min_z=min_z, max_z=max_z, cluster_func=None,cluster_colors=None)
 
         self.num_of_paths = 20  # number of paths per points to sample curvature
-        self.histogram_range = (0,50)
-
+        self.histogram_range = (0,0.5)
+        self.n_clusters = 8
     def _create_local_features(self, pcd):
 
         g = self._create_graph(pcd)
-        g = better_graph_contraction(g, int(g.number_of_nodes() / 40), 30)
+        # for _ in range(3):
+        #     g = better_graph_contraction(g, int(g.number_of_nodes() / 2), 5)
+
         dix = nx.all_pairs_shortest_path(g, self.max_path_lengths)
         # dix = networkx.all_pairs_dijkstra(g, max_path_lengths)
         bins_list = []
@@ -427,20 +431,25 @@ def test_view_results(json_path):
 
 
 if __name__ == "__main__":
-    target = HyperSkeletonCurve(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply", min_z=0, max_z=1000)
+    #TODO
+    # change distance to Frechet distance, and from std to Cov
+    # add the TPS https://github.com/tzing/tps-deformation
+    # Remove small clustering of points, and connect them to bigger clusters
+    #
+    target = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply", min_z=0, max_z=1000)
     target.down_pcd.translate(np.array([500,0,0]))
     target.create_global_features()
     o3d.visualization.draw([target.down_pcd])
-    #
-    # source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-121936_BONE_TORSO_3_X_3.ply",
-    #                        min_z=50, max_z=150, cluster_func=target.cluster_func,
-    #                        cluster_colors=target.cluster_colors)
+
+    source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-121936_BONE_TORSO_3_X_3.ply",
+                           min_z=50, max_z=150, cluster_func=target.cluster_func,
+                           cluster_colors=target.cluster_colors)
 
     # source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-121936_BONE_TORSO_3_X_3.ply",
     #                        min_z=150, max_z=250, cluster_func=target.cluster_func,
     #                        cluster_colors=target.cluster_colors)
-    # source.create_global_features()
-    # source.register(target)
+    source.create_global_features()
+    source.register(target)
     #
     # st = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     # test_HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
