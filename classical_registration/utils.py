@@ -1,5 +1,7 @@
 import numpy as np
 import json
+
+import scipy
 from sklearn.neighbors import NearestNeighbors
 import networkx as nx
 from tqdm import tqdm
@@ -99,6 +101,14 @@ def calculate_curvature(points):
     curvature = np.sqrt((grad1_norm ** 2) * (grad2_norm ** 2) - (grad1 * grad2).sum(axis=1) ** 2) / (grad1_norm ** 3)
     curvature = curvature[2:-2]
     return curvature.mean()
+
+def gaussian_wasserstein_dist(mean1,mean2, cov1,cov2):
+    mean_loss = np.linalg.norm(mean1-mean2)
+    cov2_sqrt = scipy.linalg.sqrtm(cov2)
+    trace_loss = np.trace(cov1 + cov2 - 2 * scipy.linalg.sqrtm(np.matmul(np.matmul(cov2_sqrt,cov1),cov2_sqrt)))
+    return np.sqrt(mean_loss + np.real(trace_loss))
+
+
 def chamfer_distance(x, y, metric='l2', direction='bi'):
     """Chamfer distance between two point clouds
     https://gist.github.com/sergeyprokudin/c4bf4059230da8db8256e36524993367

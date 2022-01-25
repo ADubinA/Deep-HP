@@ -4,8 +4,8 @@ import torch
 import torch.nn.parallel
 import torch.optim as optim
 from torch.utils.data import random_split
-# from pointnet.dataset import ShapeNetDataset, ModelNetDataset
-from pointnet.models.classifer_with_mean_location import PointNetCls, feature_transform_regularizer, LightningPointNet
+# from old_pointnet.dataset import ShapeNetDataset, ModelNetDataset
+from old_pointnet.models.classifer_with_mean_location import PointNetCls, feature_transform_regularizer, LightningPointNet
 import torch.nn.functional as F
 from dataset import dataloaders
 import pytorch_lightning as pl

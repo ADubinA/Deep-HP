@@ -18,8 +18,8 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 from data_utils.ModelNetDataLoader import ModelNetDataLoader
-from pointnet.models.base.pointnet2_cls_msg import  *
-from pointnet.models.base.pointnet2_utils import *
+from old_pointnet.models.base.pointnet2_cls_msg import  *
+from old_pointnet.models.base.pointnet2_utils import *
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
 sys.path.append(os.path.join(ROOT_DIR, 'models'))

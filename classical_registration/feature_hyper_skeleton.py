@@ -10,6 +10,8 @@ import numpy as np
 import networkx as nx
 import open3d as o3d
 from tqdm import tqdm
+
+from classical_registration import utils
 from create_atlas import to_spherical
 from sklearn.cluster import KMeans
 
@@ -52,13 +54,13 @@ class HyperSkeleton:
     def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None):
         self.graph_point_distance = 4
         self.min_z, self.max_z = min_z, max_z
-        self.min_path_lengths = 5
+        self.min_path_lengths = 15
         self.max_path_lengths = 20
 
         # clustering
         self.num_bins = 8
-        self.n_clusters = 32
-        self.minimum_cluster_std_mean = 2
+        self.n_clusters = 128
+        self.minimum_cluster_eig = 2
         self.path = path
         self.cluster_func = cluster_func
         if cluster_colors is None:
@@ -71,10 +73,10 @@ class HyperSkeleton:
         self.features = None
 
         # registration metric
-        self.minimum_std_distance = 100
-        self.minimum_feature_distance = 12
+        self.minimum_feature_distance = 100
+        self.minimum_correspondence_distance = 20
         self.min_correspondence_percent = 0.05
-        self.finish_fit_percent = 0.2
+        self.finish_fit_percent = 0.9
         self.num_samples = 20
 
 
@@ -97,19 +99,26 @@ class HyperSkeleton:
 
         self.features = FeaturedPointCloud()
         for connected in nx.connected_components(g):
+            if len(list(connected)) < 3:
+                continue
+
             cluster_label = g.nodes[list(connected)[0]]["label"]
             cluster_color = g.nodes[list(connected)[0]]["color"]
             points = np.stack([g.nodes[node]["point"] for node in connected])
-            if points.std(axis=0).mean() < self.minimum_cluster_std_mean:
+            cov = np.cov(points.T)
+            eig = np.linalg.eig(cov)[0]
+            if np.sqrt(np.max(eig)) < self.minimum_cluster_eig:
                 continue
 
             # if self.features.get(cluster_label,None) is None:
             #     self.features[cluster_label] = []
 
             self.features.append({"mean": points.mean(axis=0),
-                                   "std": points.std(axis=0),
-                                   "label": cluster_label,
-                                  "color": cluster_color})
+                                  "cov": cov,
+                                  "eig": eig,
+                                  "label": cluster_label,
+                                  "color": cluster_color,
+                                  "cluster": np.array(list(connected))})
 
     def _create_graph(self, pcd):
         g = nx.Graph()
@@ -183,7 +192,7 @@ class HyperSkeleton:
         X = X.transpose()
         return np.matmul(np.linalg.pinv(X).transpose(),Y).transpose()
 
-    def register(self, target, iterations=150):
+    def register(self, target, iterations=20):
         # for each label, find all consensuses
         best_fit = []
         best_error = float("infinity")
@@ -206,8 +215,8 @@ class HyperSkeleton:
             return -1,-1
 
 
-        self.visualize_results(best_fit,target)
-        return self.get_affine_transform(best_fit), best_error
+        # self.visualize_results(best_fit,target)
+        return self.get_affine_transform(best_fit), best_error , best_fit
 
     def _registration_iteration(self,target):
 
@@ -241,12 +250,17 @@ class HyperSkeleton:
         bone_tree = o3d.geometry.KDTreeFlann(target.features.pcd)
         consensus = []
         for transformed_feature in transformed_features:
-            [k, nie, _] = bone_tree.search_radius_vector_3d(transformed_feature["mean"],self.minimum_feature_distance)
-            target_features = [target.features[i] for i in nie if target.features[i]["label"] ==transformed_feature["label"]]
+            # get all points that are close enough and have the same label
+            [k, nie, _] = bone_tree.search_radius_vector_3d(transformed_feature["mean"], self.minimum_correspondence_distance)
+            target_features = [target.features[i] for i in nie if
+                               target.features[i]["label"] == transformed_feature["label"]]
             if not len(target_features):
                 continue
 
-            match = max(target_features, key=lambda x: np.linalg.norm(x["mean"]-transformed_feature["mean"]))
+            # get the closest point
+            match = max(target_features, key=lambda x: utils.gaussian_wasserstein_dist(
+                x["mean"],transformed_feature["mean"],x["cov"],transformed_feature["cov"]))
+
             consensus.append((self.features[transformed_feature["index"]], match))
 
         return consensus
@@ -266,7 +280,7 @@ class HyperSkeleton:
                 #     continue
                 if target_feature["label"] != sample["label"]:  # needs to have same label
                     continue
-                if np.linalg.norm(sample["std"] - target_feature["std"]) > self.minimum_std_distance:  # is close
+                if utils.gaussian_wasserstein_dist(0,0,sample["cov"], target_feature["cov"]) > self.minimum_feature_distance:  # is close
                     continue
                 target_options.append(target_feature)
 
@@ -279,13 +293,13 @@ class HyperSkeleton:
         return correspondence
 
     def _get_sample_concensus(self, samples):
-        bins = 10
+        bins = 5
         # calculate differences
         samples_differences = np.stack([sample[0]["mean"]-sample[1]["mean"] for sample in samples])
 
         # get histogram, calculate the max bin
         hist, edges = np.histogramdd(samples_differences,bins)
-        if hist.max() < 10:
+        if hist.max() < 3:
             return []
         max_edges = np.unravel_index(hist.argmax(), hist.shape)
 
@@ -303,6 +317,33 @@ class HyperSkeleton:
                 consensus.append(samples[sample_index])
 
         return consensus
+
+    def local_refine_icp(self, correspondences, target, max_distance=1,init=None):
+        if not init:
+            init = np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+
+        total_pcd = o3d.geometry.PointCloud()
+        for correspondence in correspondences:
+
+            source_cluster = np.asarray(self.down_pcd.points)[correspondence[0]["cluster"]]
+            source_pcd = o3d.geometry.PointCloud()
+            source_pcd.points = o3d.utility.Vector3dVector(source_cluster)
+            source_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=5, max_nn=30))
+
+            target_cluster = np.asarray(target.down_pcd.points)[correspondence[1]["cluster"]]
+            target_pcd = o3d.geometry.PointCloud()
+            target_pcd.points = o3d.utility.Vector3dVector(target_cluster)
+            target_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=5, max_nn=30))
+
+            source_pcd.translate(
+                target_pcd.compute_mean_and_covariance()[0] - source_pcd.compute_mean_and_covariance()[0])
+            reg = o3d.pipelines.registration.registration_icp(source_pcd, target_pcd, max_distance, init,
+                                                        o3d.pipelines.registration.TransformationEstimationPointToPoint())
+
+            source_pcd.transform(reg.transformation)
+            total_pcd.points.extend(source_pcd.points)
+        return total_pcd
+
 
     def visualize_results(self, consensus, target):
         moved = copy.deepcopy(self.down_pcd).transform(self.get_affine_transform(consensus))
@@ -327,6 +368,16 @@ class HyperSkeleton:
 
         linespace.colors = o3d.utility.Vector3dVector([g.nodes[i].get("color",[0,0,0]) for i in g.nodes])
         o3d.visualization.draw([linespace])
+
+    def visualize_feature_distributions(self):
+        feature_dict = {}
+        for feature in self.features:
+            if not feature_dict.get(feature["label"], False):
+                feature_dict[feature["label"]] = []
+            feature_dict[feature["label"]].append(np.linalg.det(feature['cov']))
+
+        for label, feature in feature_dict.items():
+            plt.hist(feature)
 
 
 
@@ -372,7 +423,7 @@ def test_HyperSkeleton(target_path,source_folder_path,save_path, description="")
     target = HyperSkeleton(target_path, min_z=0, max_z=1000)
     target.create_global_features()
 
-    subvolume_size = 50
+    subvolume_size = 100
     losses = []
     for file_path in glob.glob(os.path.join(source_folder_path,"*.ply")):
         print(file_path)
@@ -383,25 +434,27 @@ def test_HyperSkeleton(target_path,source_folder_path,save_path, description="")
                                    cluster_func=target.cluster_func, cluster_colors=target.cluster_colors)
             source.create_global_features()
             # o3d.visualization.draw([target.down_pcd,target.features.pcd,source.down_pcd,source.features.pcd])
-            transform, loss = source.register(target)
+            transform, loss, fit = source.register(target)
 
 
             losses.append(({"file_name": os.path.basename(file_path),
                             "slice_start": slicer_index,
                             "slice_end": slicer_index+subvolume_size,
                             "loss": loss,
-                            "transform":transform}))
+                            "transform":transform,
+                            "fit_persent": len(fit)/len(source.features),
+                            "num_of_features": len(source.features)}))
 
             result_dict = {"results":losses, "description":description,
-                           "minimum_cluster_std_mean": source.minimum_cluster_std_mean,
-                           "minimum_std_distances": source.minimum_std_distance,
-                           "minimum_std_distance":source.min_correspondence_percent,
+                           "minimum_cluster_eig": source.minimum_cluster_eig,
+                           "minimum_feature_distances": source.minimum_feature_distance,
+                           "min_correspondence_percent":source.min_correspondence_percent,
                            "n_clusters":source.n_clusters,
                            "num_bins":source.num_bins,
                            "finish_fit_percent":source.finish_fit_percent,
                            "graph_point_distance":source.graph_point_distance,
                            "max_path_lengths":source.max_path_lengths,
-                           "minimum_feature_distance":source.minimum_feature_distance
+                           "minimum_correspondence_distance":source.minimum_correspondence_distance
                            }
             with open(save_path,"w") as f:
                 json.dump(result_dict, f, cls=NumpyEncoder)
@@ -432,10 +485,11 @@ def test_view_results(json_path):
 
 if __name__ == "__main__":
     #TODO
-    # change distance to Frechet distance, and from std to Cov
     # add the TPS https://github.com/tzing/tps-deformation
     # Remove small clustering of points, and connect them to bigger clusters
-    #
+    # why is there a sqrt prob
+    # figure out how to make the features better in the spine
+
     target = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply", min_z=0, max_z=1000)
     target.down_pcd.translate(np.array([500,0,0]))
     target.create_global_features()
@@ -449,7 +503,8 @@ if __name__ == "__main__":
     #                        min_z=150, max_z=250, cluster_func=target.cluster_func,
     #                        cluster_colors=target.cluster_colors)
     source.create_global_features()
-    source.register(target)
+    affine, error, corr = source.register(target)
+    source.local_refine_icp(corr, target)
     #
     # st = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     # test_HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
@@ -458,3 +513,4 @@ if __name__ == "__main__":
     #                    description= "test with full correspondence, now with 16 labels")
     # results = r"D:\research_results\HyperSkeleton\2022-01-10_01-07-44_results.json"
     # test_view_results(results)
+

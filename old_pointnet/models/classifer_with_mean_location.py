@@ -5,7 +5,7 @@ from __future__ import print_function
 # import pytorch_lightning as pl
 # import torch.optim as optim
 # from models import pointnet2_cls_msg
-# from pointnet.losses import chamfer_distance,chamfer_distance_with_batch
+# from old_pointnet.losses import chamfer_distance,chamfer_distance_with_batch
 # class LightningPointNet(pl.LightningModule):
 #     def __init__(self, model, ref_pcd):
 #         super(LightningPointNet, self).__init__()
@@ -83,12 +83,12 @@ from __future__ import print_function
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pointnet.models.base.pointnet2_utils import PointNetSetAbstractionMsg, PointNetSetAbstraction
+from old_pointnet.models.base.pointnet2_utils import PointNetSetAbstractionMsg, PointNetSetAbstraction
 
 
 class get_model(nn.Module):
     """
-    pointnet++ for calculating the probability of a class, and it's location
+    old_pointnet++ for calculating the probability of a class, and it's location
     will have 4 times the output of the number of classes. one for probability and 3 for location.
     """
     def __init__(self,num_class,normal_channel=False):
