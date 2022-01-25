@@ -52,7 +52,8 @@ class FeaturedPointCloud:
 
 class HyperSkeleton:
     def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None):
-        self.graph_point_distance = 4
+        self.graph_point_distance = 2.5
+        self.voxel_down_sample_size = 2
         self.min_z, self.max_z = min_z, max_z
         self.min_path_lengths = 15
         self.max_path_lengths = 20
@@ -88,7 +89,7 @@ class HyperSkeleton:
         numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] > self.min_z]
         numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] < self.max_z]
         self.base_pcd.points = o3d.utility.Vector3dVector(numpy_base_pcd)
-        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(self.graph_point_distance,
+        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(self.voxel_down_sample_size,
                                                                       min_bound=np.array([0, 0, self.min_z]),
                                                                       max_bound=np.array([1000, 1000, self.max_z]))
         self.down_pcd.paint_uniform_color([0.1, 0.1, 0.1])
@@ -366,7 +367,11 @@ class HyperSkeleton:
         linespace.points = o3d.utility.Vector3dVector([g.nodes[i]["point"] for i in g.nodes])
         linespace.lines = o3d.utility.Vector2iVector([(point_indexed[edge[0]],point_indexed[edge[1]]) for edge in g.edges])
 
-        linespace.colors = o3d.utility.Vector3dVector([g.nodes[i].get("color",[0,0,0]) for i in g.nodes])
+        linespace.colors = o3d.utility.Vector3dVector(
+            [(g.nodes[point_indexed[edge[0]]].get("color",np.array([0,0,0]))
+              + g.nodes[point_indexed[edge[0]]].get("color",np.array([0,0,0])))/2
+              for edge in g.edges])
+            # [g.nodes[i].get("color",[1,0,0]) for i in g.nodes])
         o3d.visualization.draw([linespace])
 
     def visualize_feature_distributions(self):
