@@ -16,6 +16,7 @@ from create_atlas import to_spherical
 from sklearn.cluster import KMeans
 
 from utils import chamfer_distance, calculate_curvature,NumpyEncoder, better_graph_contraction
+from scipy.spatial import KDTree
 
 class FeaturedPointCloud:
     def __init__(self):
@@ -51,9 +52,9 @@ class FeaturedPointCloud:
         return iter_dict
 
 class HyperSkeleton:
-    def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None):
-        self.graph_point_distance = 2.5
-        self.voxel_down_sample_size = 2
+    def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None, has_labels=False, has_centers=False ):
+        self.graph_point_distance = 5
+        self.voxel_down_sample_size = 4
         self.min_z, self.max_z = min_z, max_z
         self.min_path_lengths = 15
         self.max_path_lengths = 20
@@ -69,9 +70,15 @@ class HyperSkeleton:
         else:
             self.cluster_colors = cluster_colors
 
+        # data
         self.base_pcd = None
         self.down_pcd = None
         self.features = None
+        self.segments = None
+        self.centers = None
+
+        self.has_labels = has_labels
+        self.has_centers = has_centers
 
         # registration metric
         self.minimum_feature_distance = 100
@@ -83,17 +90,37 @@ class HyperSkeleton:
 
         self.load_pcd()
 
+    def save_features(self, folder_path):
+        base_name = os.path.basename(self.path)
+        _, bins_list = self._create_local_features(self.down_pcd)
+        o3d.io.write_point_cloud(os.path.join(folder_path, base_name), self.down_pcd)
+        np.save(os.path.join(folder_path, base_name.replace(".ply", "_hist.npy")), bins_list)
+
     def load_pcd(self):
         self.base_pcd = o3d.io.read_point_cloud(self.path)
-        numpy_base_pcd = np.asarray(self.base_pcd.points)
-        numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] > self.min_z]
-        numpy_base_pcd = numpy_base_pcd[numpy_base_pcd[:, 2] < self.max_z]
-        self.base_pcd.points = o3d.utility.Vector3dVector(numpy_base_pcd)
-        self.down_pcd, _, _ = self.base_pcd.voxel_down_sample_and_trace(self.voxel_down_sample_size,
-                                                                      min_bound=np.array([0, 0, self.min_z]),
-                                                                      max_bound=np.array([1000, 1000, self.max_z]))
+        self.down_pcd = self._preprocess_pcd(self.base_pcd,True)
         self.down_pcd.paint_uniform_color([0.1, 0.1, 0.1])
 
+        if self.has_labels:
+            self.segments = o3d.io.read_point_cloud(self.path.replace('.', '_labels.'))
+            self.segments = self._preprocess_pcd(self.segments)
+        if self.has_centers:
+            self.centers = o3d.io.read_point_cloud(self.path.replace('.', '_centers.'))
+            self.centers = self._preprocess_pcd(self.centers)
+
+    def _preprocess_pcd(self, pcd, downsample=False):
+        numpy_pcd = np.asarray(pcd.points)
+        idx = np.logical_and(numpy_pcd[:, 2] > self.min_z, numpy_pcd[:, 2] < self.max_z)
+        pcd.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
+        if pcd.has_colors():
+            pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors)[idx])
+        if downsample:
+            down_pcd, _, _ = pcd.voxel_down_sample_and_trace(self.voxel_down_sample_size,
+                                                              min_bound=np.array([0, 0, self.min_z]),
+                                                              max_bound=np.array([1000, 1000, self.max_z]))
+        else:
+            down_pcd = pcd
+        return down_pcd
     def create_global_features(self):
         g, bins_list = self._create_local_features(self.down_pcd)
         g = self._cluster(g, bins_list)
@@ -141,7 +168,7 @@ class HyperSkeleton:
     def _create_local_features(self, pcd):
 
         g = self._create_graph(pcd)
-        # g = graph_contraction(g,0.5)
+        # g = better_graph_contraction(g,int(g.number_of_nodes()/2), 6)
         dix = nx.all_pairs_shortest_path(g, self.max_path_lengths)
         # dix = networkx.all_pairs_dijkstra(g, max_path_lengths)
         bins_list = []
@@ -163,6 +190,39 @@ class HyperSkeleton:
 
         bins_list = np.stack(bins_list)
         return g, bins_list
+    # def _create_local_features_astar(self, pcd):
+    #
+    #     g = self._create_graph(pcd)
+    #     bins_list = []
+    #     kd_tree = KDTree(np.asarray(pcd.points))
+    #     for point_index in tqdm(g.nodes, desc="Creating local features"):
+    #         options = kd_tree.query_ball_point(g.nodes[point_index]["point"], r=self.max_path_lengths)
+    #         paths = []
+    #         for option in options:
+    #             try:
+    #                 path_len = nx.astar_path_length(g,point_index,option,
+    #                                             lambda x, y: np.linalg.norm(g.nodes[x]["point"]-g.nodes[y]["point"]))
+    #             except nx.NetworkXNoPath:
+    #                 continue
+    #             if self.max_path_lengths > path_len > self.min_path_lengths:
+    #                 paths.append(option)
+    #
+    #         if len(paths) < 5:
+    #             bins = np.zeros((self.num_bins, self.num_bins))
+    #         else:
+    #             path_edges = [g.nodes[path[-1]]["point"] for path in paths]
+    #             dist = np.asarray(path_edges) - g.nodes[point_index]["point"]
+    #             dist = to_spherical(dist)
+    #             bins, _, _ = np.histogram2d(dist[:, 1], dist[:, 2], np.arange(self.num_bins + 1) * 1 / self.num_bins,
+    #                                         density=True, range=(0, 1))
+    #
+    #             bins = bins / bins.sum()
+    #         g.nodes[point_index]["histogram"] = bins
+    #         bins_list.append(bins)
+    #
+    #     bins_list = np.stack(bins_list)
+    #     return g, bins_list
+
 
     def _cluster(self, g, bins_list):
         flat_bins = bins_list.reshape(bins_list.shape[0], -1)
@@ -184,6 +244,8 @@ class HyperSkeleton:
         return g
 
     def get_affine_transform(self, correspondences):
+        if not correspondences:
+            return np.eye(4)
         X = np.stack([correspondence[0]["mean"] for correspondence in correspondences])
         Y = np.stack([correspondence[1]["mean"] for correspondence in correspondences])
 
@@ -213,7 +275,7 @@ class HyperSkeleton:
                 break
 
         if best_error == float("infinity"):
-            return -1,-1
+            return -1,-1,best_fit
 
 
         # self.visualize_results(best_fit,target)
@@ -345,7 +407,24 @@ class HyperSkeleton:
             total_pcd.points.extend(source_pcd.points)
         return total_pcd
 
+    def calculate_label_metric(self, transform, target, label_type):
+        if label_type == "segment":
+            source_pcd = self.segments
+            target_pcd = target.segments
+        else:
+            source_pcd = self.centers
+            target_pcd = target.centers
 
+        moved = copy.deepcopy(source_pcd).transform(transform)
+        unique_labels = np.unique(np.asarray(source_pcd.colors))
+        results = {}
+        for unique_label in unique_labels:
+            dist = chamfer_distance(np.asarray(moved.points)[np.asarray(moved.colors)[:,0] == unique_label],
+                             np.asarray(target_pcd.points)[np.asarray(target_pcd.colors)[:,0] == unique_label],
+                             direction="x_to_y")
+
+            results[unique_label] = dist
+        return results
     def visualize_results(self, consensus, target):
         moved = copy.deepcopy(self.down_pcd).transform(self.get_affine_transform(consensus))
 
@@ -360,18 +439,18 @@ class HyperSkeleton:
         correspondence_linesets.extend([moved,target.down_pcd, target.features.pcd, self.down_pcd, self.features.pcd])
         o3d.visualization.draw(correspondence_linesets)
 
-    def visualize_graph(self, g):
+    def visualize_graph(self, g, has_colors=True):
         linespace = o3d.geometry.LineSet()
 
         point_indexed = {node: i  for i, node in enumerate(g.nodes)}
         linespace.points = o3d.utility.Vector3dVector([g.nodes[i]["point"] for i in g.nodes])
         linespace.lines = o3d.utility.Vector2iVector([(point_indexed[edge[0]],point_indexed[edge[1]]) for edge in g.edges])
 
-        linespace.colors = o3d.utility.Vector3dVector(
-            [(g.nodes[point_indexed[edge[0]]].get("color",np.array([0,0,0]))
-              + g.nodes[point_indexed[edge[0]]].get("color",np.array([0,0,0])))/2
-              for edge in g.edges])
-            # [g.nodes[i].get("color",[1,0,0]) for i in g.nodes])
+        if has_colors:
+            linespace.colors = o3d.utility.Vector3dVector(
+                [(g.nodes[point_indexed[edge[0]]].get("color",np.array([0,0,0]))
+                  + g.nodes[point_indexed[edge[1]]].get("color",np.array([0,0,0])))/2
+                  for edge in g.edges])
         o3d.visualization.draw([linespace])
 
     def visualize_feature_distributions(self):
@@ -425,30 +504,40 @@ class HyperSkeletonCurve(HyperSkeleton):
 
 
 def test_HyperSkeleton(target_path,source_folder_path,save_path, description=""):
-    target = HyperSkeleton(target_path, min_z=0, max_z=1000)
+    target = HyperSkeleton(target_path, min_z=0, max_z=1000, has_labels=True,has_centers=True)
     target.create_global_features()
 
     subvolume_size = 100
     losses = []
     for file_path in glob.glob(os.path.join(source_folder_path,"*.ply")):
+        if "center" in file_path or "label" in file_path or "gl" in file_path:
+            continue
         print(file_path)
-        for slicer_index in [0,50,100,150,200]:
+        for slicer_index in [100,200,300,400]:
 
             source = HyperSkeleton(file_path,
                                    min_z=slicer_index, max_z=slicer_index+subvolume_size,
-                                   cluster_func=target.cluster_func, cluster_colors=target.cluster_colors)
+                                   cluster_func=target.cluster_func, cluster_colors=target.cluster_colors, has_labels=True,has_centers=True)
             source.create_global_features()
-            # o3d.visualization.draw([target.down_pcd,target.features.pcd,source.down_pcd,source.features.pcd])
             transform, loss, fit = source.register(target)
-
-
+            if source.has_labels:
+                segment_losses = source.calculate_label_metric(transform,target,"segment")
+            else:
+                segment_losses = None
+            if source.has_centers:
+                center_losses = source.calculate_label_metric(transform, target, "centers")
+            else:
+                center_losses = None
             losses.append(({"file_name": os.path.basename(file_path),
                             "slice_start": slicer_index,
                             "slice_end": slicer_index+subvolume_size,
                             "loss": loss,
                             "transform":transform,
                             "fit_persent": len(fit)/len(source.features),
-                            "num_of_features": len(source.features)}))
+                            "num_of_features": len(source.features),
+                            "segment_losses":segment_losses,
+                            "center_losses": center_losses
+                            }))
 
             result_dict = {"results":losses, "description":description,
                            "minimum_cluster_eig": source.minimum_cluster_eig,
@@ -473,7 +562,7 @@ def test_view_results(json_path):
     print(f"mean results: {not_outliars.mean()} with std of {not_outliars.std()}")
     print(f"Non detection rate is {len([result for result in results if result['loss']>100 or result['loss']<0])/len(results)}")
     print("------------------------------------")
-    for i in [0,50,100,150,200]:
+    for i in [100,200,300,400]:
         slice_results = [result["loss"] for result in results if result["slice_start"] == i]
         not_outliars = np.array([result for result in slice_results if result > 0 and result < 100])
         print(f"for slice {i}: ")
@@ -486,6 +575,34 @@ def test_view_results(json_path):
         elif result["loss"]>100:
             print(f"{result['file_name']} had bad loss of {result['file_name']} at slice: {result['slice_start']}")
 
+    segment_loss = {}
+    center_loss = {}
+    for result in results:
+        if result.get("segment_losses"):
+            for key, loss in result["segment_losses"].items():
+                segment_loss[key] = segment_loss.get(key, []) + [loss]
+
+        if result.get("center_losses"):
+            for key, loss in result["center_losses"].items():
+                center_loss[key] = center_loss.get(key, []) + [loss]
+    print("-------segment losses --------------")
+    for key, losses in segment_loss.items():
+        print(f"{key}: has {len(losses)} items and mean: {np.array(losses).mean()}, std {np.array(losses).std()}")
+    print("-------center losses----------------")
+    for key, losses in segment_loss.items():
+        print(f"{key}: has {len(losses)} items and mean: {np.array(losses).mean()}, std {np.array(losses).std()}")
+
+
+def create_training(source_folder_path, output_folder):
+    for file_path in glob.glob(os.path.join(source_folder_path, "*.ply")):
+        base_name = os.path.basename(file_path)
+        print(base_name)
+        if os.path.exists(os.path.join(output_folder, base_name)):
+            continue
+        source = HyperSkeleton(file_path,
+                               min_z=0, max_z=1000)
+        source.save_features(output_folder)
+
 
 
 if __name__ == "__main__":
@@ -495,27 +612,29 @@ if __name__ == "__main__":
     # why is there a sqrt prob
     # figure out how to make the features better in the spine
 
-    target = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply", min_z=0, max_z=1000)
-    target.down_pcd.translate(np.array([500,0,0]))
-    target.create_global_features()
-    o3d.visualization.draw([target.down_pcd])
-
-    source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-121936_BONE_TORSO_3_X_3.ply",
-                           min_z=50, max_z=150, cluster_func=target.cluster_func,
-                           cluster_colors=target.cluster_colors)
+    # target = HyperSkeleton(r"D:\datasets\VerSe2020\train\sub-verse500.ply", min_z=0, max_z=1000)#, has_labels=True, has_centers=True)
+    # target.down_pcd.translate(np.array([500,0,0]))
+    # target.create_global_features()
+    # o3d.visualization.draw([target.down_pcd, target.features.pcd])
+    #
+    # source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
+    #                        min_z=150, max_z=300, cluster_func=target.cluster_func,
+    #                        cluster_colors=target.cluster_colors)#, has_labels=True, has_centers=True)
 
     # source = HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-121936_BONE_TORSO_3_X_3.ply",
     #                        min_z=150, max_z=250, cluster_func=target.cluster_func,
     #                        cluster_colors=target.cluster_colors)
-    source.create_global_features()
-    affine, error, corr = source.register(target)
-    source.local_refine_icp(corr, target)
+    # source.create_global_features()
+    # affine, error, corr = source.register(target)
+    # source.visualize_results(corr,target)
+    # source.local_refine_icp(corr, target)
     #
     # st = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    # test_HyperSkeleton(r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
-    #                    r"D:\datasets\nmdid\clean-body-pcd",
+    # test_HyperSkeleton(r"D:\datasets\VerSe2020\train\sub-verse823.ply",
+    #                    r"D:\datasets\VerSe2020\*\\",
     #                    fr"D:\research_results\HyperSkeleton\{st}_results.json",
-    #                    description= "test with full correspondence, now with 16 labels")
-    # results = r"D:\research_results\HyperSkeleton\2022-01-10_01-07-44_results.json"
+    #                    description= "testing Verse2020 dataset with with segmentation loss")
+    # results = r"D:\research_results\HyperSkeleton\2022-02-01_02-37-34_results.json"
     # test_view_results(results)
 
+    create_training(r"D:\datasets\nmdid\clean-body-pcd", r"D:\datasets\nmdid\labeled")

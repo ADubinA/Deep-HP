@@ -7,90 +7,7 @@ import networkx as nx
 from tqdm import tqdm
 import random
 from scipy import spatial
-
-# """
-# https://meshlogic.github.io/posts/jupyter/curve-fitting/fitting-a-circle-to-cluster-of-3d-points/#disqus_thread
-# """
-# def generate_circle_by_vectors(t, C, r, n, u):
-#     n = n / np.linalg.norm(n)
-#     u = u / np.linalg.norm(u)
-#     P_circle = r * np.cos(t)[:, np.newaxis] * u + r * np.sin(t)[:, np.newaxis] * np.cross(n, u) + C
-#     return P_circle
-#
-#
-# def generate_circle_by_angles(t, C, r, theta, phi):
-#     # Orthonormal vectors n, u, <n,u>=0
-#     n = np.array([np.cos(phi) * np.sin(theta), np.sin(phi) * np.sin(theta), np.cos(theta)])
-#     u = np.array([-np.sin(phi), np.cos(phi), 0])
-#
-#     # P(t) = r*cos(t)*u + r*sin(t)*(n x u) + C
-#     P_circle = r * np.cos(t)[:, np.newaxis] * u + r * np.sin(t)[:, np.newaxis] * np.cross(n, u) + C
-#     return P_circle
-#
-# def fit_circle_2d(x, y, w=[]):
-#     A = np.array([x, y, np.ones(len(x))]).T
-#     b = x ** 2 + y ** 2
-#
-#     # Modify A,b for weighted least squares
-#     if len(w) == len(x):
-#         W = np.diag(w)
-#         A = np.dot(W, A)
-#         b = np.dot(W, b)
-#
-#     # Solve by method of least squares
-#     c = np.linalg.lstsq(A, b, rcond=None)[0]
-#
-#     # Get circle parameters from solution c
-#     xc = c[0] / 2
-#     yc = c[1] / 2
-#     r = np.sqrt(c[2] + xc ** 2 + yc ** 2)
-#     return xc, yc, r
-#
-#
-# def rodrigues_rot(P, n0, n1):
-#     # If P is only 1d array (coords of single point), fix it to be matrix
-#     if P.ndim == 1:
-#         P = P[np.newaxis, :]
-#
-#     # Get vector of rotation k and angle theta
-#     n0 = n0 / np.linalg.norm(n0)
-#     n1 = n1 / np.linalg.norm(n1)
-#     k = np.cross(n0, n1)
-#     k = k / np.linalg.norm(k)
-#     theta = np.arccos(np.dot(n0, n1))
-#
-#     # Compute rotated points
-#     P_rot = np.zeros((len(P), 3))
-#     for i in range(len(P)):
-#         P_rot[i] = P[i] * np.cos(theta) + np.cross(k, P[i]) * np.sin(theta) + k * np.dot(k, P[i]) * (1 - np.cos(theta))
-#
-#     return P_rot
-#
-# def angle_between(u, v, n=None):
-#     if n is None:
-#         return np.arctan2(np.linalg.norm(np.cross(u,v)), np.dot(u,v))
-#     else:
-#         return np.arctan2(np.dot(n,np.cross(u,v)), np.dot(u,v))
-#
-# def calculate_curvature(points):
-#
-#     points_mean = points.mean(axis=0)
-#     points_centered = points - points_mean
-#     U,s,V = np.linalg.svd(points_centered)
-#
-#     # Normal vector of fitting plane is given by 3rd column in V
-#     # Note linalg.svd returns V^T, so we need to select 3rd row from V^T
-#     normal = V[2,:]
-#
-#     # Project points to coords X-Y in 2D plane
-#     points_xy = rodrigues_rot(points_centered, normal, [0,0,1])
-#
-#     # Fit circle in new 2D coords
-#     try:
-#         _, _, r = fit_circle_2d(points_xy[:,0], points_xy[:,1])
-#     except np.linalg.LinAlgError:
-#         return 0
-#     return r
+from matplotlib.colors import hsv_to_rgb
 
 def calculate_curvature(points):
     grad1 = np.gradient(points, axis=0)
@@ -131,7 +48,8 @@ def chamfer_distance(x, y, metric='l2', direction='bi'):
         computed bidirectional Chamfer distance:
             sum_{x_i \in x}{\min_{y_j \in y}{||x_i-y_j||**2}} + sum_{y_j \in y}{\min_{x_i \in x}{||x_i-y_j||**2}}
     """
-
+    if x.shape[0] ==0 or y.shape[0] ==0:
+        return -1
     if direction == 'y_to_x':
         x_nn = NearestNeighbors(n_neighbors=1, leaf_size=1, algorithm='kd_tree', metric=metric).fit(x)
         min_y_to_x = x_nn.kneighbors(y)[0]
@@ -149,7 +67,7 @@ def chamfer_distance(x, y, metric='l2', direction='bi'):
     else:
         raise ValueError("Invalid direction type. Supported types: \'y_x\', \'x_y\', \'bi\'")
 
-    return chamfer_dist
+    return np.sqrt(chamfer_dist)
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -174,12 +92,14 @@ def graph_contraction(source_graph, contraction_percent):
     return g
 
 def better_graph_contraction(source_graph, sample_num, max_distance):
+
+    # create new nodes and graph
     new_nodes = random.sample(source_graph.nodes, sample_num)
     new_graph = nx.Graph()
     new_graph.add_nodes_from([(node,source_graph.nodes[node]) for node in new_nodes])
+
     kdtree = spatial.KDTree(np.array([source_graph.nodes[new_node]["point"] for new_node in new_nodes]))
     pairs = list(kdtree.query_pairs(max_distance))
-
     pairs = [(new_nodes[pair[0]],new_nodes[pair[1]]) for pair in pairs]
 
     pair_dict = {}
@@ -207,9 +127,16 @@ def better_graph_contraction(source_graph, sample_num, max_distance):
 
     return new_graph
 
+def gen_colormap(num_classes):
+    colormap = np.zeros((num_classes, 3))
+    colormap[..., 0] = np.arange(num_classes)/num_classes
+    colormap[..., 1] = 1
+    colormap[..., 2] = 1
+    colormap = hsv_to_rgb(colormap)
+    return colormap
 
 if __name__ == "__main__":
     i = np.arange(50) * np.pi / 50 - np.pi / 2
     points = np.transpose(np.array([np.cos(0) * np.sin(i), np.sin(0) * np.sin(i), np.cos(i)]))
     print(calculate_curvature(points))
-    print(calculate_curvature_mean(points))
+    print(calculate_curvature(points))
