@@ -2,7 +2,6 @@ import networkx
 import numpy as np
 from tqdm import tqdm
 from sklearn.cluster import KMeans
-from mayavi import mlab
 from create_atlas import *
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt

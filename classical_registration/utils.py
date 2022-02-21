@@ -127,13 +127,7 @@ def better_graph_contraction(source_graph, sample_num, max_distance):
 
     return new_graph
 
-def gen_colormap(num_classes):
-    colormap = np.zeros((num_classes, 3))
-    colormap[..., 0] = np.arange(num_classes)/num_classes
-    colormap[..., 1] = 1
-    colormap[..., 2] = 1
-    colormap = hsv_to_rgb(colormap)
-    return colormap
+
 
 if __name__ == "__main__":
     i = np.arange(50) * np.pi / 50 - np.pi / 2

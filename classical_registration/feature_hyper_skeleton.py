@@ -12,10 +12,10 @@ import open3d as o3d
 from tqdm import tqdm
 
 from classical_registration import utils
-from create_atlas import to_spherical
+from classical_registration.create_atlas import to_spherical
 from sklearn.cluster import KMeans
 
-from utils import chamfer_distance, calculate_curvature,NumpyEncoder, better_graph_contraction
+from classical_registration.utils import chamfer_distance, calculate_curvature,NumpyEncoder, better_graph_contraction
 from scipy.spatial import KDTree
 
 class FeaturedPointCloud:
@@ -86,8 +86,6 @@ class HyperSkeleton:
         self.min_correspondence_percent = 0.05
         self.finish_fit_percent = 0.9
         self.num_samples = 20
-
-
         self.load_pcd()
 
     def save_features(self, folder_path):
@@ -124,7 +122,9 @@ class HyperSkeleton:
     def create_global_features(self):
         g, bins_list = self._create_local_features(self.down_pcd)
         g = self._cluster(g, bins_list)
+        self.create_featured_pcd(g)
 
+    def create_featured_pcd(self, g):
         self.features = FeaturedPointCloud()
         for connected in nx.connected_components(g):
             if len(list(connected)) < 3:
@@ -147,8 +147,7 @@ class HyperSkeleton:
                                   "label": cluster_label,
                                   "color": cluster_color,
                                   "cluster": np.array(list(connected))})
-
-    def _create_graph(self, pcd):
+    def create_graph(self, pcd):
         g = nx.Graph()
         for point_index in range(np.asarray(pcd.points).shape[0]):
             g.add_node(point_index, point=np.asarray(pcd.points)[point_index], index=point_index)
@@ -167,7 +166,7 @@ class HyperSkeleton:
 
     def _create_local_features(self, pcd):
 
-        g = self._create_graph(pcd)
+        g = self.create_graph(pcd)
         # g = better_graph_contraction(g,int(g.number_of_nodes()/2), 6)
         dix = nx.all_pairs_shortest_path(g, self.max_path_lengths)
         # dix = networkx.all_pairs_dijkstra(g, max_path_lengths)
@@ -190,39 +189,6 @@ class HyperSkeleton:
 
         bins_list = np.stack(bins_list)
         return g, bins_list
-    # def _create_local_features_astar(self, pcd):
-    #
-    #     g = self._create_graph(pcd)
-    #     bins_list = []
-    #     kd_tree = KDTree(np.asarray(pcd.points))
-    #     for point_index in tqdm(g.nodes, desc="Creating local features"):
-    #         options = kd_tree.query_ball_point(g.nodes[point_index]["point"], r=self.max_path_lengths)
-    #         paths = []
-    #         for option in options:
-    #             try:
-    #                 path_len = nx.astar_path_length(g,point_index,option,
-    #                                             lambda x, y: np.linalg.norm(g.nodes[x]["point"]-g.nodes[y]["point"]))
-    #             except nx.NetworkXNoPath:
-    #                 continue
-    #             if self.max_path_lengths > path_len > self.min_path_lengths:
-    #                 paths.append(option)
-    #
-    #         if len(paths) < 5:
-    #             bins = np.zeros((self.num_bins, self.num_bins))
-    #         else:
-    #             path_edges = [g.nodes[path[-1]]["point"] for path in paths]
-    #             dist = np.asarray(path_edges) - g.nodes[point_index]["point"]
-    #             dist = to_spherical(dist)
-    #             bins, _, _ = np.histogram2d(dist[:, 1], dist[:, 2], np.arange(self.num_bins + 1) * 1 / self.num_bins,
-    #                                         density=True, range=(0, 1))
-    #
-    #             bins = bins / bins.sum()
-    #         g.nodes[point_index]["histogram"] = bins
-    #         bins_list.append(bins)
-    #
-    #     bins_list = np.stack(bins_list)
-    #     return g, bins_list
-
 
     def _cluster(self, g, bins_list):
         flat_bins = bins_list.reshape(bins_list.shape[0], -1)
@@ -283,14 +249,6 @@ class HyperSkeleton:
 
     def _registration_iteration(self,target):
 
-        # random sample points and targets of same size and class
-        # samples = []
-        # for i in range(self.num_samples):
-        #     try:
-        #         samples.append(self._sample_matches(target, samples))
-        #     except IndexError:
-        #         print(f"Warning: not enough features of samples for matching {self.path} and {target.path}.")
-        #         break
         # calculate histogram of differences and take the samples with consensus
         samples = self._get_correspondence(target)
         consensus = self._get_sample_concensus(samples)
@@ -562,7 +520,7 @@ def test_view_results(json_path):
     print(f"mean results: {not_outliars.mean()} with std of {not_outliars.std()}")
     print(f"Non detection rate is {len([result for result in results if result['loss']>100 or result['loss']<0])/len(results)}")
     print("------------------------------------")
-    for i in [100,200,300,400]:
+    for i in [0,100,200,300,400]:
         slice_results = [result["loss"] for result in results if result["slice_start"] == i]
         not_outliars = np.array([result for result in slice_results if result > 0 and result < 100])
         print(f"for slice {i}: ")
@@ -596,6 +554,8 @@ def test_view_results(json_path):
 def create_training(source_folder_path, output_folder):
     for file_path in glob.glob(os.path.join(source_folder_path, "*.ply")):
         base_name = os.path.basename(file_path)
+        if "label" in base_name or "center" in base_name or "gl" in base_name:
+            continue
         print(base_name)
         if os.path.exists(os.path.join(output_folder, base_name)):
             continue
@@ -634,7 +594,8 @@ if __name__ == "__main__":
     #                    r"D:\datasets\VerSe2020\*\\",
     #                    fr"D:\research_results\HyperSkeleton\{st}_results.json",
     #                    description= "testing Verse2020 dataset with with segmentation loss")
-    # results = r"D:\research_results\HyperSkeleton\2022-02-01_02-37-34_results.json"
+    # results = r"D:\research_results\HyperSkeleton\02-18-2022_18-22-07_results.json"
     # test_view_results(results)
 
-    create_training(r"D:\datasets\nmdid\clean-body-pcd", r"D:\datasets\nmdid\labeled")
+    create_training(r"D:\datasets\VerSe2020\train", r"D:\datasets\VerSe2020\train_hp_labeled")
+    create_training(r"D:\datasets\VerSe2020\validation", r"D:\datasets\VerSe2020\validation_hp_labeled")
