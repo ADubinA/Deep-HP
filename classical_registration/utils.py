@@ -22,6 +22,8 @@ def calculate_curvature(points):
 def gaussian_wasserstein_dist(mean1,mean2, cov1,cov2):
     mean_loss = np.linalg.norm(mean1-mean2)
     cov2_sqrt = scipy.linalg.sqrtm(cov2)
+    if np.any(np.isnan(cov2_sqrt)) or np.any(np.isinf(cov2_sqrt)):
+        return 10000000
     trace_loss = np.trace(cov1 + cov2 - 2 * scipy.linalg.sqrtm(np.matmul(np.matmul(cov2_sqrt,cov1),cov2_sqrt)))
     return np.sqrt(mean_loss + np.real(trace_loss))
 

@@ -102,7 +102,7 @@ class GeometricHPSDataset(GeoDataset):
         y = self.cluster_func.predict(labels.reshape(-1, 64))
         data = Data(x=torch.tensor(np.asarray(pcd.normals)).float(),
                     pos=torch.tensor(np.asarray(pcd.points)).float(),
-                    y=torch.tensor(y).float())  # ,num_nodes=len(pcd.points))
+                    y=torch.tensor(y, dtype=torch.int64))  # ,num_nodes=len(pcd.points))
 
         if self.pre_filter is not None and not self.pre_filter(data):
             return None

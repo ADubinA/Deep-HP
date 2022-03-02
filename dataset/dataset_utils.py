@@ -34,19 +34,22 @@ def load_file(path, dict_key="arr_0"):
     """
 
     if path.endswith(('.nii', '.nii.gz')):
-        image = nib.load(path).get_fdata()
-
+        nii = nib.load(path)
+        image = nii.get_fdata()
+        affine = nii.affine
     elif path.endswith('.npz'):
         image = np.load(path)[dict_key]
+        affine = np.eye(4)
     elif path.endswith(".dcm"):
-        image = pydicom.dcmread(path)
-        image = image.pixel_array
+        dcm_image = pydicom.dcmread(path)
+        image = dcm_image.pixel_array
+        affine = affine2d(dcm_image)
 
     else:
         raise OSError("unknown file was loaded")
-    return image.astype("float64")
+    return image.astype("float64"), affine
 
-def volume_to_pointcloud(volume: np.ndarray, sample_num = 0,color=None, intensity_range=None):
+def volume_to_pointcloud(volume: np.ndarray, sample_num = 0,color=None, intensity_range=None, affine=None):
     """
     generates a pointcloud from a the given volume.
     Args:
@@ -82,6 +85,8 @@ def volume_to_pointcloud(volume: np.ndarray, sample_num = 0,color=None, intensit
         pcd.colors = o3d.utility.Vector3dVector(colors[idx])
     else:
         pcd.paint_uniform_color(color)
+    if affine is not None:
+        pcd.transform(affine)
     # o3d.visualization.draw_geometries([pcd])
 
     return pcd
@@ -148,25 +153,36 @@ def verse2020_setup(folder_path, output_path):
         seg_file_path = glob.glob(os.path.join(folder_path, "derivatives", file_name, "*nii*"))[0]
         center_file_path = glob.glob(os.path.join(folder_path, "derivatives", file_name, "*json"))[0]
 
+        if os.path.exists(os.path.join(output_path, file_name+".ply")):
+            continue
+            pass
+        print(file_name)
         # handle the data
-        verse2020_raw(raw_file_path, os.path.join(output_path, file_name+".ply"), intensity_range=(500,10000))
-        verse2020_segment(seg_file_path, os.path.join(output_path, file_name+"_labels.ply"))
-        verse2020_centers(center_file_path, os.path.join(output_path, file_name+"_centers.ply"))
+        if "767" in file_name or "503" in file_name or "507" in file_name:
+            intensity = (1000, 10000)
+        else:
+            intensity = (450, 1000)
+        verse2020_raw(raw_file_path, os.path.join(output_path, file_name+".ply"), intensity_range=intensity)
+        affine = verse2020_segment(seg_file_path, os.path.join(output_path, file_name+"_labels.ply"))
+        verse2020_centers(center_file_path, os.path.join(output_path, file_name+"_centers.ply"),affine=affine)
 
 def verse2020_raw(file_path, save_path, intensity_range=(0,100000)):
-    volume = load_file(file_path)
-    pcd = volume_to_pointcloud(volume,intensity_range=intensity_range)
+    volume, affine = load_file(file_path)
+    pcd = volume_to_pointcloud(volume,intensity_range=intensity_range, affine = affine)
+    pcd.transform(np.array([[0,-1,0,0],[1,0,0,0],[0,0,0.25,0],[0,0,0,1]]))
+    pcd.paint_uniform_color([0.5,0.5,0.5])
     o3d.io.write_point_cloud(save_path, pcd)
 
 
 def verse2020_segment(file_path, save_path):
-    volume = load_file(file_path)
-    pcd = volume_to_pointcloud(volume,intensity_range=(0,100))
-
-    pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors) / 100)
+    volume, affine = load_file(file_path)
+    pcd = volume_to_pointcloud(volume,intensity_range=(0,100), affine = affine)
+    pcd.transform(np.array([[0,-1,0,0],[1,0,0,0],[0,0,0.25,0],[0,0,0,1]]))
+    pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors) / 40)
     o3d.io.write_point_cloud(save_path, pcd)
+    return affine
 
-def verse2020_centers(file_path, save_path):
+def verse2020_centers(file_path, save_path, affine=None):
     with open(file_path,"r") as f:
         points_list = json.load(f)
     pcd = o3d.geometry.PointCloud()
@@ -177,7 +193,10 @@ def verse2020_centers(file_path, save_path):
         pcd.points.append([data_dict["X"], data_dict["Y"], data_dict["Z"]])
         pcd.colors.append([data_dict["label"], data_dict["label"], data_dict["label"]])
 
-    pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors) / 100)
+    pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors) / 40)
+    if affine is not None:
+        pcd.transform(affine)
+    pcd.transform(np.array([[0,-1,0,0],[1,0,0,0],[0,0,0.25,0],[0,0,0,1]]))
     o3d.io.write_point_cloud(save_path, pcd)
 
 
@@ -202,9 +221,9 @@ def ctpel_setup(folder_path, output_path):
         # verse2020_centers(center_file_path, os.path.join(output_path, file_name+"_centers.ply"))
 if __name__=="__main__":
     verse_path =  r"D:\datasets\VerSe2020\raw_train\\"
-    output_path = r"D:\datasets\VerSe2020\train\\"
-    verse2020_setup(verse_path,output_path)
+    output_path = r"D:\datasets\VerSe2020\new_train\\"
+    verse2020_setup(verse_path, output_path)
 
     verse_path =  r"D:\datasets\VerSe2020\raw_validation\\"
-    output_path = r"D:\datasets\VerSe2020\validation\\"
-    verse2020_setup(verse_path,output_path)
+    output_path = r"D:\datasets\VerSe2020\new_validation\\"
+    verse2020_setup(verse_path, output_path)
