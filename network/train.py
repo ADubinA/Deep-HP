@@ -25,8 +25,9 @@ from deep_utils import RandomCrop,RandomScaleAxis
 import math
 
 class DeepHyperSkeleton(HyperSkeleton):
-    def __init__(self, path, model, min_z=150, max_z=200, cluster_func=None, cluster_colors=None, has_labels=False, has_centers=False):
-        super().__init__(path, min_z, max_z, cluster_func, cluster_colors, has_labels, has_centers)
+    def __init__(self, path, model, bounds=(np.array([0,0,0]), np.array([1000,1000,1000])),
+                 cluster_func=None, cluster_colors=None, has_labels=False, has_centers=False):
+        super().__init__(path, bounds, cluster_func, cluster_colors, has_labels, has_centers)
         self.model = model
         self.model_point_size = 8000
         self.g = None
@@ -123,7 +124,7 @@ def train():
 @torch.no_grad()
 def test(model, target_path,source_folder_path,save_path, description="", has_labels=True, has_centers=True):
     os.mkdir(os.path.join(save_path))
-    target = DeepHyperSkeleton(target_path,model, min_z=-1000, max_z=1000, has_labels=has_labels, has_centers=has_centers)
+    target = DeepHyperSkeleton(target_path,model, has_labels=has_labels, has_centers=has_centers)
     target.create_global_features()
     o3d.io.write_point_cloud(osp.join(save_path, osp.basename(target_path).replace(".ply", "_ref.ply")), target.down_pcd)
     subvolume_size = 100
@@ -179,64 +180,7 @@ def test(model, target_path,source_folder_path,save_path, description="", has_la
             with open(osp.join(save_path,f"{time_string}_results.json"),"w") as f:
                 json.dump(result_dict, f, cls=NumpyEncoder)
 
-# def self_deformation(model, target_path,source_folder_path,save_path, description="", has_labels=False, has_centers=False):
-#     target = DeepHyperSkeleton(target_path,model, min_z=0, max_z=1000, has_labels=has_labels, has_centers=has_centers)
-#     target.create_global_features()
-#
-#     subvolume_size = 100
-#     losses = []
-#     os.mkdir(os.path.join(save_path))
-#     for file_path in glob.glob(osp.join(source_folder_path,"*.ply")):
-#         if "center" in file_path or "label" in file_path or "gl" in file_path:
-#             continue
-#         print(file_path)
-#         for slicer_index in [0,100,200,300,400, 500,600]:
-#
-#             source = DeepHyperSkeleton(file_path,model,
-#                                    min_z=slicer_index, max_z=slicer_index+subvolume_size,
-#                                        has_labels=has_labels, has_centers=has_centers)
-#
-#             if len(source.base_pcd.points)<100:
-#                 continue
-#
-#             source.create_global_features()
-#             transform, loss, fit = source.register(target)
-#             if source.has_labels:
-#                 segment_losses = source.calculate_label_metric(transform,target,"segment")
-#             else:
-#                 segment_losses = None
-#             if source.has_centers:
-#                 center_losses = source.calculate_label_metric(transform, target, "centers")
-#             else:
-#                 center_losses = None
-#             losses.append(({"file_name": osp.basename(file_path),
-#                             "slice_start": slicer_index,
-#                             "slice_end": slicer_index+subvolume_size,
-#                             "loss": loss,
-#                             "transform":str(transform),
-#                             "fit_persent": len(fit)/len(source.features),
-#                             "num_of_features": len(source.features),
-#                             "segment_losses":segment_losses,
-#                             "center_losses": center_losses
-#                             }))
-#
-#             result_dict = {"results":losses, "description":description,
-#                            "minimum_cluster_eig": source.minimum_cluster_eig,
-#                            "minimum_feature_distances": source.registration_alg.minimum_feature_distance,
-#                            "min_correspondence_percent":source.registration_alg.min_correspondence_percent,
-#                            "n_clusters":source.n_clusters,
-#                            "num_bins":source.num_bins,
-#                            "finish_fit_percent":source.registration_alg.finish_fit_percent,
-#                            "graph_point_distance":source.graph_point_distance,
-#                            "max_path_lengths":source.max_path_lengths,
-#                            "minimum_correspondence_distance":source.registration_alg.minimum_correspondence_distance
-#                            }
-#             if loss>0:
-#                 o3d.io.write_point_cloud(osp.join(save_path,osp.basename(file_path).replace(".ply", f"_{slicer_index}.ply")),
-#                                          (transform.transform(source.down_pcd)))
-#             with open(osp.join(save_path,f"{time_string}_results.json"),"w") as f:
-#                 json.dump(result_dict, f, cls=NumpyEncoder)
-#     T.GridSampling
+
 if __name__ == "__main__":
     time_string = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

@@ -61,11 +61,105 @@ class FeaturedPointCloud:
         iter_dict.update(self.features[item])
         return iter_dict
 
-class HyperSkeleton:
-    def __init__(self, path, min_z=150, max_z=200, cluster_func=None,cluster_colors=None, has_labels=False, has_centers=False ):
+class ABSFeatures:
+    def __init__(self, path, bounds=(np.array([0,0,0]), np.array([1000,1000,1000])),
+                 voxel_down_sample_size=4, has_labels=False,has_centers=False):
+        self.path = path
+        self.voxel_down_sample_size = voxel_down_sample_size
+
+        # data
+        self.base_pcd = None
+        self.down_pcd = None
+        self.features = None
+        self.segments = None
+        self.centers = None
+
+        self.bounds = bounds
+        self.has_labels = has_labels
+        self.has_centers = has_centers
+        self.registration_alg = ABSRegistration()
+        self.base_translate = None
+
+        self.load_pcd()
+
+    def load_pcd(self):
+        self.base_pcd = o3d.io.read_point_cloud(self.path)
+        # translate minimum of the pcd to (0,0,0)
+        self.base_translate = -self.base_pcd.get_min_bound()
+
+        self.down_pcd = self._preprocess_pcd(self.base_pcd, True)
+        self.down_pcd.paint_uniform_color([0.1, 0.1, 0.1])
+
+        if self.has_labels:
+            self.segments = o3d.io.read_point_cloud(self.path.replace('.', '_labels.'))
+            self.segments = self._preprocess_pcd(self.segments)
+        if self.has_centers:
+            self.centers = o3d.io.read_point_cloud(self.path.replace('.', '_centers.'))
+            self.centers = self._preprocess_pcd(self.centers)
+    def augment(self, noise_std, ):
+        points = np.asarray(self.down_pcd.points)
+        points = points + np.random.normal(loc=0, scale=noise_std,size=points.shape)
+        self.down_pcd.points = o3d.utility.Vector3dVector(points)
+    def _preprocess_pcd(self, pcd, downsample=False):
+        pcd.translate(self.base_translate)
+        numpy_pcd = np.asarray(pcd.points)
+        idx = np.logical_and(np.all(numpy_pcd > self.bounds[0], axis=1),
+                             np.all(numpy_pcd < self.bounds[1], axis=1))
+        if pcd.has_colors():
+            pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors)[idx])
+            pcd.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
+        else:
+            pcd.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
+
+        if downsample:
+            down_pcd = pcd.voxel_down_sample(self.voxel_down_sample_size)
+        else:
+            down_pcd = pcd
+        return down_pcd
+
+    def calculate_label_metric(self, transform, target, label_type):
+        if label_type == "segment":
+            source_pcd = self.segments
+            target_pcd = target.segments
+        else:
+            source_pcd = self.centers
+            target_pcd = target.centers
+
+        moved = transform.transform(copy.deepcopy(source_pcd))
+        unique_labels = np.unique(np.asarray(source_pcd.colors))
+        results = {}
+        for unique_label in unique_labels:
+            dist = chamfer_distance(np.asarray(moved.points)[np.asarray(moved.colors)[:,0] == unique_label],
+                             np.asarray(target_pcd.points)[np.asarray(target_pcd.colors)[:,0] == unique_label],
+                             direction="x_to_y")
+
+            results[unique_label] = dist
+        return results
+
+    def visualize_results(self, consensus, target):
+        pcd_transform = self.registration_alg.get_transform(consensus)
+        moved = pcd_transform.transform(copy.deepcopy(self.down_pcd))
+
+        lineset = o3d.geometry.LineSet()
+        lines, connections, colors = [], [], []
+        for idx, line in enumerate(consensus):
+            lines.extend([line[0]["mean"], line[1]["mean"]])
+            connections.append([2*idx, 2*idx+1])
+            colors.append(np.random.random(3))
+
+        lineset.points = o3d.utility.Vector3dVector(lines)
+        lineset.lines = o3d.utility.Vector2iVector(connections)
+        lineset.colors = o3d.utility.Vector3dVector(colors)
+
+        o3d.visualization.draw([lineset, moved,target.down_pcd, target.features.pcd, self.down_pcd, self.features.pcd])
+
+class HyperSkeleton(ABSFeatures):
+    def __init__(self, path, bounds=(np.array([0,0,0]), np.array([1000,1000,1000])),
+                 voxel_down_sample_size=4, cluster_func=None, cluster_colors=None, has_labels=False,
+                 has_centers=False):
+        super().__init__(path, bounds, has_labels, has_centers)
         self.graph_point_distance = 5
-        self.voxel_down_sample_size = 4
-        self.min_z, self.max_z = min_z, max_z
+        self.voxel_down_sample_size = voxel_down_sample_size
         self.min_path_lengths = 15
         self.max_path_lengths = 20
 
@@ -80,58 +174,11 @@ class HyperSkeleton:
         else:
             self.cluster_colors = cluster_colors
 
-        # data
-        self.base_pcd = None
-        self.down_pcd = None
-        self.features = None
-        self.segments = None
-        self.centers = None
-
-        self.has_labels = has_labels
-        self.has_centers = has_centers
-        self.registration_alg = ABSRegistration()
-
-        self.base_translate = None
-        self.load_pcd()
-
     def save_features(self, folder_path):
         base_name = os.path.basename(self.path)
         _, bins_list = self._create_local_features(self.down_pcd)
         o3d.io.write_point_cloud(os.path.join(folder_path, base_name), self.down_pcd)
         np.save(os.path.join(folder_path, base_name.replace(".ply", "_hist.npy")), bins_list)
-
-    def load_pcd(self):
-        self.base_pcd = o3d.io.read_point_cloud(self.path)
-        # translate minimum of the pcd to (0,0,0)
-        self.base_translate = -self.base_pcd.get_min_bound()
-
-        self.down_pcd = self._preprocess_pcd(self.base_pcd,True)
-        self.down_pcd.paint_uniform_color([0.1, 0.1, 0.1])
-
-        if self.has_labels:
-            self.segments = o3d.io.read_point_cloud(self.path.replace('.', '_labels.'))
-            self.segments = self._preprocess_pcd(self.segments)
-        if self.has_centers:
-            self.centers = o3d.io.read_point_cloud(self.path.replace('.', '_centers.'))
-            self.centers = self._preprocess_pcd(self.centers)
-
-    def _preprocess_pcd(self, pcd, downsample=False):
-        pcd.translate(self.base_translate)
-        numpy_pcd = np.asarray(pcd.points)
-        idx = np.logical_and(numpy_pcd[:, 2] > self.min_z, numpy_pcd[:, 2] < self.max_z)
-        if pcd.has_colors():
-            pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors)[idx])
-            pcd.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
-        else:
-            pcd.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
-
-        if downsample:
-            down_pcd, _, _ = pcd.voxel_down_sample_and_trace(self.voxel_down_sample_size,
-                                                              min_bound=np.array([0, 0, self.min_z]),
-                                                              max_bound=np.array([1000, 1000, self.max_z]))
-        else:
-            down_pcd = pcd
-        return down_pcd
 
     def create_global_features(self):
         g, bins_list = self._create_local_features(self.down_pcd)
@@ -252,41 +299,7 @@ class HyperSkeleton:
     #         total_pcd.points.extend(source_pcd.points)
     #     return total_pcd
 
-    def calculate_label_metric(self, transform, target, label_type):
-        if label_type == "segment":
-            source_pcd = self.segments
-            target_pcd = target.segments
-        else:
-            source_pcd = self.centers
-            target_pcd = target.centers
 
-        moved = transform.transform(copy.deepcopy(source_pcd))
-        unique_labels = np.unique(np.asarray(source_pcd.colors))
-        results = {}
-        for unique_label in unique_labels:
-            dist = chamfer_distance(np.asarray(moved.points)[np.asarray(moved.colors)[:,0] == unique_label],
-                             np.asarray(target_pcd.points)[np.asarray(target_pcd.colors)[:,0] == unique_label],
-                             direction="x_to_y")
-
-            results[unique_label] = dist
-        return results
-
-    def visualize_results(self, consensus, target):
-        pcd_transform = self.registration_alg.get_transform(consensus)
-        moved = pcd_transform.transform(copy.deepcopy(self.down_pcd))
-
-        lineset = o3d.geometry.LineSet()
-        lines, connections, colors = [], [], []
-        for idx, line in enumerate(consensus):
-            lines.extend([line[0]["mean"], line[1]["mean"]])
-            connections.append([2*idx, 2*idx+1])
-            colors.append(np.random.random(3))
-
-        lineset.points = o3d.utility.Vector3dVector(lines)
-        lineset.lines = o3d.utility.Vector2iVector(connections)
-        lineset.colors = o3d.utility.Vector3dVector(colors)
-
-        o3d.visualization.draw([lineset, moved,target.down_pcd, target.features.pcd, self.down_pcd, self.features.pcd])
     @staticmethod
 
 

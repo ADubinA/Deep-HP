@@ -219,6 +219,14 @@ def ctpel_setup(folder_path, output_path):
         # verse2020_raw(raw_file_path, os.path.join(output_path, file_name+".ply"), intensity_range=(500,10000))
         # verse2020_segment(seg_file_path, os.path.join(output_path, file_name+"_labels.ply"))
         # verse2020_centers(center_file_path, os.path.join(output_path, file_name+"_centers.ply"))
+
+
+def calculate_bone_percent(path, intensity_range=(450, 1000)):
+    data = load_file(path)[0]
+    pcd = volume_to_pointcloud(data, intensity_range=intensity_range)
+    return len(pcd.points)/(data.shape[0]*data.shape[1]*data.shape[2])
+
+
 if __name__=="__main__":
     verse_path =  r"D:\datasets\VerSe2020\raw_train\\"
     output_path = r"D:\datasets\VerSe2020\new_train\\"

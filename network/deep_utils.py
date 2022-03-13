@@ -6,9 +6,25 @@ import numpy as np
 from matplotlib.colors import hsv_to_rgb
 import os.path as osp
 import pathlib
-
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
+from emd_build.emd_module import emdModule
+from math import floor
+def emd_cuda(pcd1, pcd2):
+    # to cuda
+    pcd1, pcd2 = torch.tensor(pcd1).cuda(), torch.tensor(pcd2).cuda()
+
+    # resample to both to 1024*n
+    sample_times = min(floor(pcd1.shape[0] / 1024), floor(pcd2.shape[0] / 1024))
+    sample_num = 4*1024#sample_times*1024
+    pcd1 = pcd1[torch.randperm(pcd1.shape[0])[:sample_num]]
+    pcd2 = pcd2[torch.randperm(pcd2.shape[0])[:sample_num]]
+
+    # run emd
+    pcd1, pcd2 = pcd1.unsqueeze(0), pcd2.unsqueeze(0)
+    emd = emdModule()
+    dis, ass = emd(pcd1, pcd2, 0.05, 3000)
+    return np.sqrt(dis.cpu())
 
 def gen_colormap(num_classes):
     colormap = np.zeros((num_classes, 3))
@@ -126,3 +142,12 @@ class RandomScaleAxis(BaseTransform):
         data.pos[:,self.axis] = data.pos[:,self.axis] * scale
         return data
 
+if __name__ == "__main__":
+    path = r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply"
+    pcd = o3d.io.read_point_cloud(path)
+    dis = emd_cuda(np.asarray(pcd.points),
+             np.asarray(pcd.points)[np.asarray(pcd.points)[:,2]<50])
+    dis2 = emd_cuda(np.asarray(pcd.points)[np.asarray(pcd.points)[:,2]<50],
+             np.asarray(pcd.points))
+    print(dis.mean())
+    print(dis2.mean())
