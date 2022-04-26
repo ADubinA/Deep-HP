@@ -5,11 +5,11 @@ import os
 import numpy as np
 import tqdm
 
-from SkeletonHPDataloader import GeometricHPSDataset
+from network.SkeletonHPDataloader import GeometricHPSDataset
 import os.path as osp
 import torch.nn.functional as F
 from datetime import datetime
-from pointnet2 import Net
+from network.pointnet2 import Net
 import torch
 import torch_geometric.transforms as T
 from torch_geometric.datasets import ShapeNet
@@ -17,21 +17,23 @@ from torch_geometric.datasets import ShapeNet
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 import open3d as o3d
-from deep_utils import visualize_batch_result, gen_colormap
+from network.deep_utils import visualize_batch_result, gen_colormap
 from tensorboardX import SummaryWriter
 from classical_registration.feature_hyper_skeleton import HyperSkeleton
-from classical_registration.utils import NumpyEncoder
-from deep_utils import RandomCrop,RandomScaleAxis
+from classical_registration.utils import NumpyEncoder, percent_slicer
+from network.deep_utils import RandomCrop,RandomScaleAxis
 import math
 
 class DeepHyperSkeleton(HyperSkeleton):
-    def __init__(self, path, model, bounds=(np.array([0,0,0]), np.array([1000,1000,1000])),
-                 cluster_func=None, cluster_colors=None, has_labels=False, has_centers=False):
-        super().__init__(path, bounds, cluster_func, cluster_colors, has_labels, has_centers)
+    def __init__(self, path, model, bounds=(np.array([0,0,0]), np.array([1,1,1])),voxel_down_sample_size=2,
+                 cluster_func=None, cluster_colors=None, has_labels=True, has_centers=True):
+        super().__init__(path, bounds,voxel_down_sample_size, cluster_func, cluster_colors, has_labels, has_centers)
         self.model = model
         self.model_point_size = 8000
         self.g = None
     def create_global_features(self):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
         self.down_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=5, max_nn=30))
         colormap = gen_colormap(self.n_clusters)
         g = self.create_graph(self.down_pcd)
@@ -49,6 +51,7 @@ class DeepHyperSkeleton(HyperSkeleton):
             chosen_label = np.argmax(np.bincount(results[nei]))
             g.nodes[point_index]["label"] = chosen_label
             g.nodes[point_index]["color"] = colormap[chosen_label]
+            self.down_pcd.colors[g.nodes[point_index]["index"]] = colormap[chosen_label]
 
 
         different_cluster_edges = [edge for edge in g.edges if g.nodes[edge[0]]["label"] != g.nodes[edge[1]]["label"]]
@@ -62,7 +65,7 @@ def train_iter(epoch, model, train_loader,writer,log_dir):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     model.train()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+    model.to(device)
     best_acc = total_loss = correct_nodes = total_nodes = 0
     for i, data in enumerate(train_loader):
         data = data.to(device)
@@ -90,25 +93,55 @@ def train_iter(epoch, model, train_loader,writer,log_dir):
 
     visualize_batch_result(data, out.argmax(dim=1), save_path=osp.join(log_dir, str(epoch)))
 
+def val_iter(epoch, model, val_loader,writer,log_dir):
+    with torch.no_grad():
+        model.eval()
+        device = "cpu"#torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.to(device)
+        best_acc = total_loss = correct_nodes = total_nodes = 0
+        for i, data in enumerate(val_loader):
+            data = data.to(device)
+            out = model(data)
+
+            loss = F.nll_loss(out, data.y.long())
+            total_loss += loss.item()
+            correct_nodes += out.argmax(dim=1).eq(data.y).sum().item()
+            total_nodes += data.num_nodes
+
+            writer.add_scalar("validation_loss", loss)
+            if (i + 1) % 3 == 0:
+                acc = correct_nodes / total_nodes
+                print(f'[{i+1}/{len(val_loader)}] validation Loss: {total_loss / 10:.4f} '
+                      f'validation Acc: {acc:.4f}')
+                if acc > best_acc:
+                    best_acc = acc
+                    torch.save(model.state_dict(), osp.join(log_dir,"val_best_model.pt"))
+                    print("best validation model found and save")
+
+                total_loss = correct_nodes = total_nodes = 0
+
+        visualize_batch_result(data, out.argmax(dim=1), save_path=osp.join(log_dir, str(epoch)))
+
+
 def train():
 
     log_dir = f'runs/{time_string}'
-    comment = "Test on the new data of Verse"
-    path = r"D:\datasets\VerSe2020\train_hp_labeled"
-    # path = r"D:\datasets\VerSe2020\train_hp_labeled"
+    comment = "retraining on nmdid"
+    train_path = r"D:\datasets\nmdid\labeled"
+    val_path =r"D:\datasets\VerSe2020\train_hp_labeled"
     transform = T.Compose([
-        RandomCrop(torch.tensor([1, 1, 0.4]), torch.tensor([2.0, 2.0, 2.0])),
+        RandomCrop(torch.tensor([1, 1, 0.3]), torch.tensor([2.0, 2.0, 2.0])),
         T.FixedPoints(8000),
         # T.GridSampling(0.01),
-        # T.RandomTranslate(0.1),
+        T.RandomTranslate(0.05),
         RandomScaleAxis((0.95, 1.05), 2),
         T.RandomRotate(45, axis=0),
         T.RandomRotate(45, axis=1),
         T.RandomRotate(45, axis=2)
     ])
     pre_transform = T.NormalizeScale()
-    train_dataset = GeometricHPSDataset(path,pre_transform=pre_transform, transform=transform,num_classes=num_classes)
-    test_dataset = GeometricHPSDataset(path)
+    train_dataset = GeometricHPSDataset(train_path,pre_transform=pre_transform, transform=transform,num_classes=num_classes)
+    test_dataset = GeometricHPSDataset(val_path,pre_transform=pre_transform,num_classes=num_classes)
     train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True,
                               num_workers=1)
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False,
@@ -118,85 +151,15 @@ def train():
     writer = SummaryWriter(log_dir,comment=comment)
 
     for epoch in tqdm.tqdm(range(1, 50)):
-        train_iter(epoch, model,train_loader,writer,log_dir)
+        train_iter(epoch, model, train_loader, writer, log_dir)
+        # val_iter(epoch, model, test_loader, writer, log_dir)
 
 
-@torch.no_grad()
-def test(model, target_path,source_folder_path,save_path, description="", has_labels=True, has_centers=True):
-    os.mkdir(os.path.join(save_path))
-    target = DeepHyperSkeleton(target_path,model, has_labels=has_labels, has_centers=has_centers)
-    target.create_global_features()
-    o3d.io.write_point_cloud(osp.join(save_path, osp.basename(target_path).replace(".ply", "_ref.ply")), target.down_pcd)
-    subvolume_size = 100
-    losses = []
-    for file_path in glob.glob(osp.join(source_folder_path,"*.ply")):
-        if "center" in file_path or "label" in file_path or "gl" in file_path:
-            continue
-        print(file_path)
-        for slicer_index in [0,100,200,300,400, 500,600]:
 
-            source = DeepHyperSkeleton(file_path,model,
-                                   min_z=slicer_index, max_z=slicer_index+subvolume_size,
-                                       has_labels=has_labels, has_centers=has_centers)
-
-            if len(source.base_pcd.points)<100:
-                continue
-
-            source.create_global_features()
-            transform, loss, fit = source.register(target)
-            if source.has_labels:
-                segment_losses = source.calculate_label_metric(transform,target,"segment")
-            else:
-                segment_losses = None
-            if source.has_centers:
-                center_losses = source.calculate_label_metric(transform, target, "centers")
-            else:
-                center_losses = None
-            losses.append(({"file_name": osp.basename(file_path),
-                            "slice_start": slicer_index,
-                            "slice_end": slicer_index+subvolume_size,
-                            "loss": loss,
-                            "transform":str(transform),
-                            "fit_persent": len(fit)/len(source.features),
-                            "num_of_features": len(source.features),
-                            "segment_losses":segment_losses,
-                            "center_losses": center_losses
-                            }))
-
-            result_dict = {"results":losses, "description":description,
-                           "minimum_cluster_eig": source.minimum_cluster_eig,
-                           "minimum_feature_distances": source.registration_alg.minimum_feature_distance,
-                           "min_correspondence_percent":source.registration_alg.min_correspondence_percent,
-                           "n_clusters":source.n_clusters,
-                           "num_bins":source.num_bins,
-                           "finish_fit_percent":source.registration_alg.finish_fit_percent,
-                           "graph_point_distance":source.graph_point_distance,
-                           "max_path_lengths":source.max_path_lengths,
-                           "minimum_correspondence_distance":source.registration_alg.minimum_correspondence_distance
-                           }
-
-            o3d.io.write_point_cloud(osp.join(save_path,osp.basename(file_path).replace(".ply", f"_{slicer_index}.ply")),
-                                         (transform.transform(source.down_pcd)))
-            with open(osp.join(save_path,f"{time_string}_results.json"),"w") as f:
-                json.dump(result_dict, f, cls=NumpyEncoder)
 
 
 if __name__ == "__main__":
     time_string = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     num_classes = 64
-    # train()
-    #
-    test_model_path = r"F:\dev\pointermorpher\network\runs\withcrop-02-24-2022_19-52-53\best_model.pt"
-    model = Net(num_classes).to(device)
-    model.load_state_dict(torch.load(test_model_path))
-
-    # test(model, r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply",
-    #                    r"D:\datasets\nmdid\clean-body-pcd",
-    #                    fr"D:\research_results\HyperSkeleton\{time_string}",
-    #                    description="deep HP skeleton Rerun of on nmdid, using TPS, with trained with crop")
-
-    test(model, r"D:\datasets\VerSe2020\new_train\sub-verse506.ply",
-                       r"D:\datasets\VerSe2020\new_train\\",
-                       fr"D:\research_results\HyperSkeleton\{time_string}",
-                       description="deep HP skeleton test on verse with affine transform. added high rotations to training with higher percent")
+    train()

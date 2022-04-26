@@ -1,4 +1,4 @@
-from random import random
+# from random import random
 
 import open3d as o3d
 import torch
@@ -10,6 +10,7 @@ from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
 from emd_build.emd_module import emdModule
 from math import floor
+
 def emd_cuda(pcd1, pcd2):
     # to cuda
     pcd1, pcd2 = torch.tensor(pcd1).cuda(), torch.tensor(pcd2).cuda()
@@ -85,7 +86,7 @@ def visualize_single_result(data, labels=None, num_classes=64, save_path=None):
     else:
         o3d.visualization.draw([pcd])
 
-def extra_pretty_vis(list_geo, rad = 3):
+def extra_pretty_vis(list_geo, rad = 3, lookat = [200, 200, 100],eye=[-200,50,100], up=[0,0,1],):
     vis = []
     for geo in list_geo:
         points = np.asarray(geo.points)
@@ -103,7 +104,7 @@ def extra_pretty_vis(list_geo, rad = 3):
                 vis.append(geo)
         except AttributeError:
             continue
-    o3d.visualization.draw(vis)
+    o3d.visualization.draw(vis,lookat = lookat,eye=eye, up=up, show_skybox=False)
 
 
 
@@ -138,7 +139,7 @@ class RandomScaleAxis(BaseTransform):
         self.scales = scales
         self.axis= axis
     def __call__(self, data: Data) -> Data:
-        scale = random.uniform(*self.scales)
+        scale = np.random.uniform(*self.scales)
         data.pos[:,self.axis] = data.pos[:,self.axis] * scale
         return data
 

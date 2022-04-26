@@ -62,7 +62,7 @@ class FeaturedPointCloud:
         return iter_dict
 
 class ABSFeatures:
-    def __init__(self, path, bounds=(np.array([0,0,0]), np.array([1000,1000,1000])),
+    def __init__(self, path, bounds=(np.array([0, 0, 0]), np.array([1, 1, 1])),
                  voxel_down_sample_size=4, has_labels=False,has_centers=False):
         self.path = path
         self.voxel_down_sample_size = voxel_down_sample_size
@@ -80,7 +80,6 @@ class ABSFeatures:
         self.registration_alg = ABSRegistration()
         self.base_translate = None
 
-        self.load_pcd()
 
     def load_pcd(self):
         self.base_pcd = o3d.io.read_point_cloud(self.path)
@@ -102,9 +101,12 @@ class ABSFeatures:
         self.down_pcd.points = o3d.utility.Vector3dVector(points)
     def _preprocess_pcd(self, pcd, downsample=False):
         pcd.translate(self.base_translate)
+
         numpy_pcd = np.asarray(pcd.points)
-        idx = np.logical_and(np.all(numpy_pcd > self.bounds[0], axis=1),
-                             np.all(numpy_pcd < self.bounds[1], axis=1))
+        min_bounds = pcd.get_min_bound() + self.bounds[0] * (pcd.get_max_bound() - pcd.get_min_bound())
+        max_bounds = pcd.get_min_bound() + self.bounds[1] * (pcd.get_max_bound() - pcd.get_min_bound())
+        idx = np.logical_and(np.all(numpy_pcd > min_bounds, axis=1),
+                             np.all(numpy_pcd < max_bounds, axis=1))
         if pcd.has_colors():
             pcd.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors)[idx])
             pcd.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
@@ -154,18 +156,18 @@ class ABSFeatures:
         o3d.visualization.draw([lineset, moved,target.down_pcd, target.features.pcd, self.down_pcd, self.features.pcd])
 
 class HyperSkeleton(ABSFeatures):
-    def __init__(self, path, bounds=(np.array([0,0,0]), np.array([1000,1000,1000])),
-                 voxel_down_sample_size=4, cluster_func=None, cluster_colors=None, has_labels=False,
+    def __init__(self, path, bounds=(np.array([0,0,0]), np.array([1,1,1])),
+                 voxel_down_sample_size=2, cluster_func=None, cluster_colors=None, has_labels=False,
                  has_centers=False):
-        super().__init__(path, bounds, has_labels, has_centers)
-        self.graph_point_distance = 5
+        super().__init__(path, bounds,voxel_down_sample_size, has_labels, has_centers)
+        self.graph_point_distance = 2.5
         self.voxel_down_sample_size = voxel_down_sample_size
         self.min_path_lengths = 15
         self.max_path_lengths = 20
 
         # clustering
         self.num_bins = 8
-        self.n_clusters = 128
+        self.n_clusters = 64
         self.minimum_cluster_eig = 2
         self.path = path
         self.cluster_func = cluster_func
@@ -360,7 +362,9 @@ class ABSRegistration:
                 break
 
         if best_error == float("infinity"):
-            return self.get_transform(best_fit), -1, best_fit
+            transform = self.get_transform(best_fit)
+            moved = transform.transform(copy.deepcopy(source.down_pcd))
+            best_error = chamfer_distance(np.asarray(moved.points), np.asarray(target.down_pcd.points), direction="x_to_y")
 
         # self.visualize_results(best_fit,target)
         return self.get_transform(best_fit), best_error, best_fit
@@ -398,9 +402,9 @@ class ABSRegistration:
                 continue
 
             # get the closest point
-            match = max(target_features, key=lambda x: utils.gaussian_wasserstein_dist(
-                x["mean"], transformed_feature["mean"], x["cov"], transformed_feature["cov"]))
-
+            # match = max(target_features, key=lambda x: utils.gaussian_wasserstein_dist(
+            #     x["mean"], transformed_feature["mean"], x["cov"], transformed_feature["cov"]))
+            match = max(target_features, key=lambda x:np.linalg.norm(x["mean"] - transformed_feature["mean"]))
             consensus.append((source.features[transformed_feature["index"]], match))
 
         return consensus
@@ -420,9 +424,9 @@ class ABSRegistration:
                 #     continue
                 if target_feature["label"] != sample["label"]:  # needs to have same label
                     continue
-                if utils.gaussian_wasserstein_dist(0, 0, sample["cov"],
-                                                   target_feature["cov"]) > self.minimum_feature_distance:  # is close
-                    continue
+                # if utils.gaussian_wasserstein_dist(0, 0, sample["cov"],
+                #                                    target_feature["cov"]) > self.minimum_feature_distance:  # is close
+                #     continue
                 target_options.append(target_feature)
 
             if len(target_options) == 0:

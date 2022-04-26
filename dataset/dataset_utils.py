@@ -228,9 +228,9 @@ def calculate_bone_percent(path, intensity_range=(450, 1000)):
 
 
 if __name__=="__main__":
-    verse_path =  r"D:\datasets\VerSe2020\raw_train\\"
-    output_path = r"D:\datasets\VerSe2020\new_train\\"
-    verse2020_setup(verse_path, output_path)
+    # verse_path =  r"D:\datasets\VerSe2020\raw_train\\"
+    # output_path = r"D:\datasets\VerSe2020\new_train\\"
+    # verse2020_setup(verse_path, output_path)
 
     verse_path =  r"D:\datasets\VerSe2020\raw_validation\\"
     output_path = r"D:\datasets\VerSe2020\new_validation\\"

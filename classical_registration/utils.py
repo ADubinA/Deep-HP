@@ -9,6 +9,20 @@ import random
 from scipy import spatial
 from matplotlib.colors import hsv_to_rgb
 
+
+def percent_slicer(percent):
+    slicers = []
+    for i in np.arange(0, 1, percent):
+        for j in np.arange(0, 1, percent):
+            for k in np.arange(0, 1, percent):
+                slicers.append(np.array([[i, j, k], [i + percent, j + percent, k + percent]]))
+    return slicers
+def z_percent_slicer(percent):
+    slicers = []
+    for k in np.arange(0, 1, percent):
+        slicers.append(np.array([[0, 0, k], [1, 1, k + percent]]))
+    return slicers
+
 def calculate_curvature(points):
     grad1 = np.gradient(points, axis=0)
     grad2 = np.gradient(grad1, axis=0)
