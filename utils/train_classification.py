@@ -1,17 +1,13 @@
 from __future__ import print_function
-import argparse
-import os,datetime
 import random
 import torch
 import torch.nn.parallel
 import torch.optim as optim
 from torch.utils.data import random_split
-# from pointnet.dataset import ShapeNetDataset, ModelNetDataset
-from pointnet.model import PointNetCls, feature_transform_regularizer, LightningPointNet
+# from old_pointnet.dataset import ShapeNetDataset, ModelNetDataset
+from old_pointnet.models.classifer_with_mean_location import PointNetCls, feature_transform_regularizer, LightningPointNet
 import torch.nn.functional as F
-from tqdm import tqdm
 from dataset import dataloaders
-from tensorboardX import SummaryWriter
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint

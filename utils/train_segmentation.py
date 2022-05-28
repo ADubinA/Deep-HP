@@ -2,12 +2,10 @@ from __future__ import print_function
 import argparse
 import os
 import random
-import torch
-import torch.nn.parallel
 import torch.optim as optim
 import torch.utils.data
-from pointnet.dataset import ShapeNetDataset
-from pointnet.model import PointNetDenseCls, feature_transform_regularizer
+from old_pointnet.dataset import ShapeNetDataset
+from old_pointnet.models.classifer_with_mean_location import PointNetDenseCls, feature_transform_regularizer
 import torch.nn.functional as F
 from tqdm import tqdm
 import numpy as np
