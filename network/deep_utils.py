@@ -1,4 +1,5 @@
 # from random import random
+import copy
 
 import open3d as o3d
 import torch
@@ -86,7 +87,7 @@ def visualize_single_result(data, labels=None, num_classes=64, save_path=None):
     else:
         o3d.visualization.draw([pcd])
 
-def extra_pretty_vis(list_geo, rad = 3, lookat = [200, 200, 100],eye=[-200,50,100], up=[0,0,1],):
+def extra_pretty_vis(list_geo, rad = 5, lookat = [200, 200, 100],eye=[-200,50,100], up=[0,0,1]):
     vis = []
     for geo in list_geo:
         points = np.asarray(geo.points)
@@ -105,6 +106,38 @@ def extra_pretty_vis(list_geo, rad = 3, lookat = [200, 200, 100],eye=[-200,50,10
         except AttributeError:
             continue
     o3d.visualization.draw(vis,lookat = lookat,eye=eye, up=up, show_skybox=False)
+
+def visualize_registration_results(source_path, target_path, moved_path):
+    scale_array = np.array([[1,0,0,0],[0,1,0,0],[0,0,4,0],[0,0,0,1]])
+    target = o3d.io.read_point_cloud(target_path)
+    target.transform(scale_array)
+    target.paint_uniform_color([1,0,0])
+    source = o3d.io.read_point_cloud(source_path)
+    source.transform(scale_array)
+    source.paint_uniform_color([0,1,0])
+    moved = o3d.io.read_point_cloud(moved_path)
+    moved.paint_uniform_color([0,1,0])
+    moved.transform(scale_array)
+    source = source.voxel_down_sample(4)
+    if "[[00_00_00]_[10_10_05]]" in moved_path:
+        bounds = np.array([[0, 0, 0], [1, 1, 0.5]])
+    else:
+        bounds = np.array([[0, 0, 0.5], [1, 1, 1]])
+
+    numpy_pcd = np.asarray(source.points)
+    min_bounds = source.get_min_bound() + bounds[0] * (source.get_max_bound() - source.get_min_bound())
+    max_bounds = source.get_min_bound() + bounds[1] * (source.get_max_bound() - source.get_min_bound())
+    idx = np.logical_and(np.all(numpy_pcd > min_bounds, axis=1),
+                         np.all(numpy_pcd < max_bounds, axis=1))
+    if source.has_colors():
+        source.colors = o3d.utility.Vector3dVector(np.asarray(source.colors)[idx])
+        source.points = o3d.utility.Vector3dVector(numpy_pcd[idx])
+    source.translate(-source.get_min_bound())
+    source.translate((target.get_max_bound() - target.get_min_bound())/2)
+    source.translate(np.array([-100,200,-50]))
+
+    extra_pretty_vis([target,source,moved], lookat = [500, 500, 400],eye=[-700,500,400])
+
 
 
 
@@ -144,11 +177,7 @@ class RandomScaleAxis(BaseTransform):
         return data
 
 if __name__ == "__main__":
-    path = r"D:\datasets\nmdid\clean-body-pcd\case-100114_BONE_TORSO_3_X_3.ply"
-    pcd = o3d.io.read_point_cloud(path)
-    dis = emd_cuda(np.asarray(pcd.points),
-             np.asarray(pcd.points)[np.asarray(pcd.points)[:,2]<50])
-    dis2 = emd_cuda(np.asarray(pcd.points)[np.asarray(pcd.points)[:,2]<50],
-             np.asarray(pcd.points))
-    print(dis.mean())
-    print(dis2.mean())
+    source_path = r"D:\datasets\VerSe2020\new_validation\sub-verse508.ply"
+    target_path = r"D:\research_results\HyperSkeleton\new_article_results\04-27-2022_12-39-32\sub-verse508_ref.ply"
+    moved_path = r"D:\research_results\HyperSkeleton\new_article_results\04-27-2022_12-39-32\sub-verse508_[[00_00_05]_[10_10_10]].ply"
+    visualize_registration_results(source_path, target_path, moved_path)

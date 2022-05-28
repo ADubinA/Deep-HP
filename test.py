@@ -221,35 +221,39 @@ def view_results(json_path, show_sub_loss=False,percent=True):
     else:
         sizes = np.array([1])
 
-    not_outliars = not_outliars/sizes
+    not_outliars = not_outliars/sizes*100
     print(f"mean results: {not_outliars.mean():.2f} \\pm {not_outliars.std():.2f}")
-    print(f"Non detection rate is {len([result for result in results if result['loss']>100 or result['loss']<0])/len(results)}")
-    print(f"consensus percent: {consensus_percent.mean():.2f} \\pm {consensus_percent.std():.2f}")
+    # print(f"Non detection rate is {len([result for result in results if result['loss']>100 or result['loss']<0])/len(results)}")
 
     segment_loss = {}
     center_loss = {}
-    for result in results:
+    for i, result in enumerate(results):
         if result.get("segment_losses"):
             for key, loss in result["segment_losses"].items():
-                segment_loss[key] = segment_loss.get(key, []) + [loss]
+                if loss == -1:
+                    continue
+                segment_loss[key] = segment_loss.get(key, []) + [loss/sizes[i]*100]
         if result.get("center_losses"):
             for key, loss in result["center_losses"].items():
-                center_loss[key] = center_loss.get(key, []) + [loss]
+                if loss == -1:
+                    continue
+                center_loss[key] = center_loss.get(key, []) + [loss/sizes[i]*100]
 
     segment_total_loss = []
     for key, losses in segment_loss.items():
         segment_total_loss.extend(losses)
         if show_sub_loss:
             print(f"{key}: has {len(losses)} items and mean: {np.array(losses).mean():.2f}, std {np.array(losses).std():.2f}")
-    segment_total_loss = np.array(segment_total_loss)/sizes
+    segment_total_loss = np.array(segment_total_loss)
     print(f"total segment losses mean: {segment_total_loss.mean():.2f} \\pm {segment_total_loss.std():.2f}")
     center_total_loss = []
     for key, losses in center_loss.items():
         center_total_loss.extend(losses)
         if show_sub_loss:
             print(f"{key}: has {len(losses)} items and mean: {np.array(losses).mean():.2f}, std {np.array(losses).std():.2f}")
-    center_total_loss = np.array(segment_total_loss)/sizes
+    center_total_loss = np.array(center_total_loss)
     print(f"total center losses mean: {center_total_loss.mean():.2f} \\pm {center_total_loss.std():.2f}")
+    print(f"consensus percent: {consensus_percent.mean():.2f} \\pm {consensus_percent.std():.2f}")
 
 def calculate_size_for_results(result):
     return np.linalg.norm(np.array(result.get("max_oriented_bounds")) - np.array(result.get("min_oriented_bounds")))
@@ -258,10 +262,10 @@ def full_summery(folder_path):
     for jfile_path in glob.glob(osp.join(folder_path, "*", "*_results.json")):
         view_results(jfile_path)
 
-print("starting")
 if __name__ == "__main__":
 
     # result_path = r"D:\research_results\HyperSkeleton\new_article_results"
+    # np.set_printoptions(formatter={'float': lambda x: "{0:0.3f}".format(x)})
     # full_summery(result_path)
     seed = 8008135
     random.seed(seed)
@@ -292,7 +296,7 @@ if __name__ == "__main__":
                               description= f"{args.algo_type} with 0.5 zslicer with validation of {args.exp_type} and has {args.aug} noise",
                               slicer=0.5, data_type="verse")
         elif args.exp_type == "verse":
-            run_results_verse(hp_model_setup, r"D:\datasets\VerSe2020\new_validation\sub-verse508.ply",
+            run_results_verse(setup_model, r"D:\datasets\VerSe2020\new_validation\sub-verse508.ply",
                               r"D:\datasets\VerSe2020\new_validation",
                               fr"D:\research_results\HyperSkeleton\{time_string}",
                               description= f"{args.algo_type} with 0.5 zslicer with validation of {args.exp_type} and has {args.aug} noise",
